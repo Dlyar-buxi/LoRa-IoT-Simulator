@@ -1,32 +1,123 @@
-"""FastAPI 入口（Sprint 4.4.1 ~ 4.4.4）。
+"""FastAPI 入口（Sprint 4.4.1 ~ 5.1）。
 
 提供 REST API（/api/*），并托管前端 Dashboard（frontend/ 静态文件）。
 Backend 作为 Adapter：包裹冻结的 simulator.Simulation 引擎，并兼任自身 UI 的
 Web 服务器（根路径 / 直接提供 frontend/index.html，同源免 CORS）。
 路由只读查询，不修改任何冻结模块。
 
-后续 Sprint 计划：连接 SQLite（database.py）与 MQTT（mqtt_client.py）。
+Sprint 5.1 新增：
+- 进程内 WebSocket 管理器（/ws），把仿真遥测实时推给 Dashboard。
+- telemetry sink：engine.step() 每产生一条记录，同时发布到 MQTT Broker
+  （外部遥测出口，可选）并广播给所有 WS 客户端。
+- MQTT 经 mqtt_client（懒连接，broker 不可用静默降级）。
 """
 
+import asyncio
+import json
+import logging
 import os
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
+from .engine import engine
+from .mqtt_client import mqtt
 from .routes import router
+
+logging.basicConfig(level=logging.INFO)
 
 # frontend/ 位于项目根（backend 的上一级），与 backend 同属本服务，同源免 CORS
 FRONTEND_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "frontend")
 )
 
+# ---------- 进程内 WebSocket 管理器 ----------
+class WsManager:
+    """维护 WS 客户端集合，并向其广播遥测文本。
+
+    仅一个 Python set + 捕获主事件循环；不引入 queue / thread 框架。
+    """
+
+    def __init__(self):
+        self._clients = set()
+        self._loop = None
+
+    def attach_loop(self, loop):
+        self._loop = loop
+
+    def has_clients(self):
+        return bool(self._clients)
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self._clients.add(ws)
+
+    def disconnect(self, ws: WebSocket):
+        self._clients.discard(ws)
+
+    async def broadcast(self, message: str):
+        for ws in list(self._clients):
+            try:
+                await ws.send_text(message)
+            except Exception:
+                self._clients.discard(ws)
+
+    def broadcast_sync(self, message: str):
+        """从同步上下文（engine.step 内）桥接广播到事件循环。"""
+        if not self._clients or self._loop is None or self._loop.is_closed():
+            return
+        asyncio.run_coroutine_threadsafe(self.broadcast(message), self._loop)
+
+
+ws_manager = WsManager()
+
+
+# ---------- telemetry sink（Engine -> MQTT + WS）----------
+def telemetry_sink(record: dict):
+    # 1) MQTT 外部出口（broker 不可用时 publish 静默返回 False）
+    mqtt.publish("lora/device/data", record, qos=0, retain=False)
+    # 2) WebSocket 实时广播给 Dashboard（经主事件循环桥接）
+    if ws_manager.has_clients():
+        ws_manager.broadcast_sync(json.dumps(record, ensure_ascii=False))
+
+
+# ---------- 生命周期：捕获主循环 + 懒连 MQTT ----------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    ws_manager.attach_loop(asyncio.get_running_loop())
+    mqtt.connect()  # 失败静默降级，不影响应用启动
+    engine.set_telemetry_sink(telemetry_sink)
+    yield
+    engine.set_telemetry_sink(None)
+    mqtt.disconnect()
+
+
 app = FastAPI(
     title="LoRa-IoT-Simulator Backend",
-    description="LoRa 智慧农业 / 工业物联网 网络仿真与监控平台 — REST API + Dashboard",
-    version="4.4.4",
+    description="LoRa 智慧农业 / 工业物联网 网络仿真与监控平台 — REST API + WebSocket + Dashboard",
+    version="5.1.0",
+    lifespan=lifespan,
 )
 
 app.include_router(router)
 
+
+@app.websocket("/ws")
+async def ws_endpoint(websocket: WebSocket):
+    """实时遥测通道：连接后接收每条 device/data 记录（JSON 文本）。"""
+    ws_manager.attach_loop(asyncio.get_running_loop())
+    await ws_manager.connect(websocket)
+    try:
+        # 保持连接；客户端可发任意文本作心跳，这里仅接收并忽略
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception:
+        ws_manager.disconnect(websocket)
+
+
 # 托管前端 Dashboard：根路径 / 直接返回 frontend/index.html（同源，免 CORS）
+# 必须在 /ws 之后挂载，否则 "/" 挂载会优先拦截 /ws 的 websocket scope。
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

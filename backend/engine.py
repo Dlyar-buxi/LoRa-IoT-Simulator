@@ -42,6 +42,7 @@ class SimulationEngine:
         self.history = []          # 事件级包历史（每次 step 的采集记录）
         self._node_map = {}        # node_id -> SensorNode（O(1) 查找）
         self._gw_map = {}          # gateway id -> Gateway（O(1) 查找）
+        self._telemetry_sink = None  # 可选遥测出口（单 callable，默认 None）
         self._build()
 
     # ---------- 拓扑构建（只读，不运行）----------
@@ -95,6 +96,15 @@ class SimulationEngine:
         self._build()
         return self.state
 
+    def set_telemetry_sink(self, sink):
+        """注入遥测出口（单 callable，默认 None）。
+
+        每次 step() 生成一条 history 记录后调用 sink(record)。
+        不引入 queue / thread / observer 框架——仅一个可选回调。
+        sink 异常会被 step() 内部吞掉，绝不中断仿真推进。
+        """
+        self._telemetry_sink = sink
+
     def step(self, n=1):
         """推进 n 个离散事件（直接驱动冻结 Scheduler 的事件堆）。
 
@@ -136,7 +146,7 @@ class SimulationEngine:
                         success = True
                     elif gw.failed_count > b_f:
                         success = False
-                self.history.append({
+                record = {
                     "time": round(self.sim.scheduler.current_time, 2),
                     "event": event.action,
                     "node": node.node_id,
@@ -145,7 +155,14 @@ class SimulationEngine:
                     "snr": node.last_snr,
                     "gateway": gw_id,
                     "success": success,
-                })
+                }
+                self.history.append(record)
+                # 遥测出口：append history 后立即外发（MQTT/WS），异常不影响仿真
+                if self._telemetry_sink is not None:
+                    try:
+                        self._telemetry_sink(record)
+                    except Exception:
+                        pass
             executed += 1
 
         if not self.sim.scheduler.event_queue:

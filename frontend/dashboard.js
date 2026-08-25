@@ -11,6 +11,46 @@ const STEP_PER_TICK = 5;    // 每次推进的事件数
 
 let autoTimer = null;
 
+// ---------- WebSocket 实时通道（Sprint 5.1）----------
+// 初始：REST 首屏加载；运行：WebSocket 实时；异常：REST 轮询降级。
+let wsOnline = false;
+let livePackets = [];
+let ws = null;
+
+function handleTelemetry(rec) {
+  livePackets.push(rec);
+  if (livePackets.length > 300) livePackets.shift();
+  renderPackets(livePackets.slice(-30));
+}
+
+function setWsBadge(text, cls) {
+  let b = $("ws-badge");
+  if (!b) {
+    const sb = $("state-badge");
+    if (sb && sb.parentNode) {
+      b = document.createElement("span");
+      b.id = "ws-badge";
+      sb.parentNode.insertBefore(b, sb.nextSibling);
+    }
+  }
+  if (b) { b.textContent = text; b.className = "badge " + cls; }
+}
+
+function connectWs() {
+  const proto = location.protocol === "https:" ? "wss://" : "ws://";
+  try {
+    ws = new WebSocket(proto + location.host + "/ws");
+  } catch (e) {
+    wsOnline = false;
+    setWsBadge("WS 离线", "state-finished");
+    return;
+  }
+  ws.onopen = () => { wsOnline = true; setWsBadge("WS 在线", "state-running"); };
+  ws.onmessage = (e) => { try { handleTelemetry(JSON.parse(e.data)); } catch (_) {} };
+  ws.onclose = () => { wsOnline = false; setWsBadge("WS 离线", "state-finished"); };
+  ws.onerror = () => { wsOnline = false; setWsBadge("WS 离线", "state-finished"); };
+}
+
 // ---------- 工具 ----------
 function $(id) { return document.getElementById(id); }
 
@@ -33,14 +73,18 @@ function svgEl(tag, attrs) {
 // ---------- 刷新与渲染 ----------
 async function refresh() {
   try {
-    const [status, stats, nodes, gateways, history, packets] = await Promise.all([
+    const calls = [
       apiGet("/api/simulation/status"),
       apiGet("/api/statistics"),
       apiGet("/api/nodes"),
       apiGet("/api/gateways"),
       apiGet("/api/history"),
-      apiGet("/api/packets?limit=30"),
-    ]);
+    ];
+    // WS 在线时，packet 表由实时通道驱动；离线时回退 REST 拉取
+    if (!wsOnline) calls.push(apiGet("/api/packets?limit=30"));
+    const results = await Promise.all(calls);
+    const [status, stats, nodes, gateways, history] = results;
+    const packets = wsOnline ? livePackets.slice(-30) : results[5];
     renderStatus(status, stats);
     renderTopology(nodes, gateways);
     renderPdr(history);
@@ -189,4 +233,5 @@ window.addEventListener("DOMContentLoaded", () => {
   refresh();
   setInterval(refresh, 1500);  // 基础轮询，保证手动操作后 KPI 即时刷新
   if ($("chk-auto").checked) setAuto(true);
+  connectWs();  // 实时通道：连上后 packet 表转由 /ws 驱动
 });
