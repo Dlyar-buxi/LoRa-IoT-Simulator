@@ -1,0 +1,34 @@
+# Build context exclusions for the LoRa-IoT-Simulator backend image.
+# Keep the build fast and the image free of local state / dev artifacts.
+
+# Local Python environments
+venv/
+.venv/
+env/
+
+# Bytecode / caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local databases (persisted via the named volume instead)
+*.db
+*.sqlite
+*.sqlite3
+
+# VCS / CI
+.git/
+.github/
+
+# Local env files
+.env
+
+# Docs / examples / screenshots are not needed inside the runtime image
+docs/
+examples/
+screenshots/
+
+# Compose / ignore files themselves
+docker-compose.yml
+.gitignore
+.dockerignore

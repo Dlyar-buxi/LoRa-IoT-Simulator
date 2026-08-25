@@ -21,7 +21,8 @@ dashboard with MQTT telemetry export and SQLite experiment persistence.
 - **SQLite experiment persistence** — full topology + per-event telemetry recorded; replay & A/B compare.
 - **Parameterized experiment platform** — inject node count / area / gateway placement / seed / ADR at runtime via REST.
 - **Resilient by design** — MQTT, SQLite and WebSocket failures degrade silently; nothing crashes the sim.
-- **Hermetic test suite** — 12/12 regression; frozen-core diff is always empty.
+- **Hermetic test suite** — 14/14 regression across backend + simulator + gateway; frozen-core diff always empty.
+- **One-command automation** — headless experiment generation + Markdown report (`scripts/`), no web server required.
 
 ## Architecture
 
@@ -99,10 +100,23 @@ The dashboard (`frontend/`, served at `/`) provides:
 - **Grids** — node topology (SVG), PDR, SF distribution, RSSI map.
 - **Packet table** — recent events streamed over WebSocket.
 
-> Experiment parameters are configured through the REST API (see below). The
-> dashboard itself does not yet expose a config panel — see Roadmap (5.5).
-
 Press **Start** (or **Step**) and watch the topology and curves update in real time.
+
+### Experiment Configuration Panel (Sprint 5.5)
+
+The dashboard includes a configuration panel (top of the page) that lets you set
+the next experiment without touching code or curl:
+
+- **Nodes** (`node_count`) — number of sensor nodes.
+- **Area size** (`area_size`) — square field side in meters.
+- **Seed** (`seed`) — RNG seed for reproducible topologies.
+- **Duration** (`duration`) — simulation horizon in seconds.
+- **Gateways** (`gateway_count`, 1–4) — gateways are auto-placed and color-coded on the topology.
+- **ADR enabled** (`adr_enabled`) — adaptive data rate toggle.
+
+Press **Apply** to commit the configuration; this stops any auto-run and the UI
+prompts you to press **Start**. Invalid input (e.g. 0 nodes) is reported inline
+in the panel. The current configuration is pre-filled from `GET /api/simulation/config`.
 
 ## Experiment Platform (Sprint 5.3)
 
@@ -164,6 +178,27 @@ DB_PATH=experiments.db
 
 If the DB is unavailable, recording degrades silently and the API returns an empty list.
 
+## Automated Demo (Sprint 6.0)
+
+Headless scripts in `scripts/` run a full simulation and export a report
+**without starting the web server** — ideal for CI, batch runs, and Docker.
+
+```bash
+# One-command local demo: generates demo.db and demo_report.md
+bash scripts/run_demo.sh
+
+# Run a custom headless experiment (records to a SQLite file)
+python scripts/generate_experiment.py \
+    --nodes 50 --area 1000 --seed 7 --duration 120 --gateways 3 --adr --db run.db
+
+# Export the latest (or a specific --id) experiment to Markdown
+python scripts/export_report.py --db run.db --out run_report.md
+```
+
+These scripts import only `backend.engine` and `backend.database`; they never
+launch uvicorn, WebSocket, or MQTT. `Packet Loss Rate` in the report is derived
+as `1 - PDR` (the frozen PHY model does not expose a separate collision counter).
+
 ## API Reference
 
 Base URL: `http://127.0.0.1:8000`  •  Prefix: `/api`  •  Full detail: [`docs/api.md`](docs/api.md)
@@ -207,11 +242,33 @@ Base URL: `http://127.0.0.1:8000`  •  Prefix: `/api`  •  Full detail: [`docs
 
 ```bash
 pip install -r requirements.txt
-python -m pytest backend/ -q
+pip install pytest
+python -m pytest backend/ simulator/ gateway/ -q
 ```
 
 Hermetic tests use `tempfile` / `:memory:` / `DB_ENABLED=false` — they never
-pollute the project directory. Regression target: **12/12**.
+pollute the project directory. Regression target: **14/14** (backend + simulator
++ gateway; no live MQTT broker required). A GitHub Actions workflow
+(`.github/workflows/test.yml`) runs this suite on every push and PR.
+
+## Benchmarks
+
+Reproducible headless runs (via `scripts/generate_experiment.py`). The frozen PHY
+model recovers most collisions through retransmission, so **PDR stays near 100%**
+across scales; `Packet Loss Rate = 1 - PDR`. `Throughput` is received packets per
+second of simulation time.
+
+| Nodes | Area (m) | Gateways | ADR | Seed | Duration (s) | Events | Retrans. | Throughput | PDR |
+|------:|---------:|---------:|-----|------:|-------------:|-------:|---------:|-----------:|----:|
+| 200 | 2000 | 2 | off | 42 | 60 | 207 | 7 | 3.33 | 100% |
+| 200 | 800  | 2 | on  | 7  | 60 | 206 | 6 | 3.33 | 100% |
+| 50  | 1000 | 3 | on  | 3  | 120 | 50 | 0 | 0.42 | 100% |
+| 100 | 1500 | 4 | on  | 11 | 90 | 100 | 0 | 1.11 | 100% |
+
+Reproduce any row with e.g.:
+```bash
+python scripts/generate_experiment.py --nodes 200 --area 2000 --seed 42 --duration 60 --gateways 2
+```
 
 ## Project Structure
 
@@ -224,14 +281,37 @@ LoRa-IoT-Simulator/
 ├── docs/             # architecture.md, api.md
 ├── examples/         # curl scripts & MQTT subscriber guide
 ├── screenshots/      # demo captures
-├── requirements.txt
+├── scripts/          # headless CLI: generate_experiment.py, export_report.py, run_demo.sh
+├── .github/          # workflows (CI) + issue/PR templates
+├── Dockerfile        # backend image (python:3.12-slim)
+├── .dockerignore
 ├── docker-compose.yml
 ├── .env.example
+├── LICENSE           # MIT
+├── CONTRIBUTING.md
+├── CHANGELOG.md
 └── README.md
 ```
 
-> `network_server/` and `analysis/` are legacy early-stage modules **not wired into**
-> the running platform; they are excluded from the live architecture above.
+## Release v1.0
+
+The project is tagged **`v1.0.0`** (RC v5.5 baseline). Highlights:
+
+- **MIT licensed** — free to use, modify, and redistribute.
+- **Frozen simulation core** — `simulator/` and `gateway/` are byte-level unchanged
+  since Sprint 4; the backend is a pure Adapter over them.
+- **Full open-source kit** — Docker image + Compose, headless scripts, CI, issue/PR
+  templates, and this documentation.
+- **No GitHub Release API is invoked** by the tooling; `git tag v1.0.0` is created
+  manually after the freeze commit.
+
+Get it:
+
+```bash
+git clone https://github.com/Dlyar-buxi/LoRa-IoT-Simulator.git
+cd LoRa-IoT-Simulator
+docker compose up --build      # full stack with one command
+```
 
 ## Roadmap
 
@@ -243,7 +323,8 @@ LoRa-IoT-Simulator/
 | 5.2 | done | SQLite experiment persistence |
 | 5.3 | done | Parameterized experiment platform |
 | 5.4 | done | Project packaging (README, docs, examples, docker, screenshots) |
-| 5.5 | idea | Dashboard Experiment Config Panel (frontend) |
+| 5.5 | done | Dashboard Experiment Config Panel (frontend) |
+| 6.0 | done | Open-source release hardening (MIT, Docker, scripts, CI, docs) |
 
 ## Resume Highlights
 

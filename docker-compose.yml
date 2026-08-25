@@ -7,28 +7,33 @@
 #   backend   — FastAPI app (uvicorn backend.main:app) on http://localhost:8000
 #   mosquitto — optional MQTT broker (telemetry export target, topic lora/device/data)
 #
+# Experiments are persisted to a named volume (experiments-db) mounted at
+# /app/data so they survive container restarts.
+#
 # IMPORTANT:
 #   * MQTT is NOT a hard dependency. If mosquitto is stopped or removed, the
 #     backend's telemetry export degrades silently and the simulation continues.
 #     Run `docker compose up backend` to skip the broker entirely.
-#   * This does not change how Python runs locally, nor how `pytest` behaves.
 #   * The dashboard is served by the backend at http://localhost:8000/
 
 services:
   backend:
-    image: python:3.12-slim
-    working_dir: /app
-    volumes:
-      - .:/app
+    build: .
     ports:
       - "8000:8000"
     environment:
       MQTT_BROKER_URL: mqtt://mosquitto:1883
       DB_ENABLED: "true"
-      DB_PATH: /app/experiments.db
-    command: >
-      bash -c "pip install --no-cache-dir -r requirements.txt &&
-               uvicorn backend.main:app --host 0.0.0.0 --port 8000"
+      DB_PATH: /app/data/experiments.db
+    volumes:
+      - experiments-db:/app/data
+    healthcheck:
+      # The backend serves the dashboard at "/", so a 200 there means it is up.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       - mosquitto
 
@@ -39,6 +44,9 @@ services:
     configs:
       - source: mosquitto_conf
         target: /mosquitto/config/mosquitto.conf
+
+volumes:
+  experiments-db:
 
 configs:
   mosquitto_conf:
