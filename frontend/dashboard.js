@@ -1,0 +1,192 @@
+// LoRa Dashboard (Sprint 4.4.4) — 零依赖原生 JS + SVG
+// 通过同源于后端挂载的 /api/* 拉取数据；无 CDN、可离线运行。
+"use strict";
+
+const API = window.location.origin;
+const SVGNS = "http://www.w3.org/2000/svg";
+const GW_COLOR = { GW001: "#2b6cb0", GW002: "#dd6b20" };
+
+const TICK_MS = 900;        // 自动运行步进间隔
+const STEP_PER_TICK = 5;    // 每次推进的事件数
+
+let autoTimer = null;
+
+// ---------- 工具 ----------
+function $(id) { return document.getElementById(id); }
+
+async function apiGet(path) {
+  const r = await fetch(API + path, { cache: "no-store" });
+  if (!r.ok) throw new Error(path + " HTTP " + r.status);
+  return r.json();
+}
+async function apiPost(path) {
+  const r = await fetch(API + path, { method: "POST", cache: "no-store" });
+  if (!r.ok) throw new Error(path + " HTTP " + r.status);
+  return r.json();
+}
+function svgEl(tag, attrs) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+// ---------- 刷新与渲染 ----------
+async function refresh() {
+  try {
+    const [status, stats, nodes, gateways, history, packets] = await Promise.all([
+      apiGet("/api/simulation/status"),
+      apiGet("/api/statistics"),
+      apiGet("/api/nodes"),
+      apiGet("/api/gateways"),
+      apiGet("/api/history"),
+      apiGet("/api/packets?limit=30"),
+    ]);
+    renderStatus(status, stats);
+    renderTopology(nodes, gateways);
+    renderPdr(history);
+    renderRssi(nodes);
+    renderSf(nodes);
+    renderPackets(packets);
+  } catch (e) {
+    console.error("refresh failed:", e);
+  }
+}
+
+function renderStatus(s, stats) {
+  $("kpi-pdr").textContent = (stats.pdr * 100).toFixed(1) + "%";
+  $("kpi-throughput").textContent = stats.throughput.toFixed(2);
+  $("kpi-received").textContent = s.received;
+  $("kpi-lost").textContent = s.lost;
+  $("kpi-time").textContent = s.time.toFixed(2);
+  $("kpi-pending").textContent = s.pending;
+  const badge = $("state-badge");
+  badge.textContent = s.state;
+  badge.className = "badge state-" + s.state;
+}
+
+function renderTopology(nodes, gateways) {
+  const root = $("topo");
+  root.innerHTML = "";
+  for (const g of gateways) {
+    root.appendChild(svgEl("rect", {
+      x: g.x - 18, y: g.y - 18, width: 36, height: 36,
+      fill: "#111827", stroke: "#ffffff", "stroke-width": 3,
+    }));
+    const t = svgEl("text", {
+      x: g.x, y: g.y + 6, fill: "#fff", "font-size": 20, "text-anchor": "middle",
+    });
+    t.textContent = g.id;
+    root.appendChild(t);
+  }
+  for (const n of nodes) {
+    const c = n.gateway && GW_COLOR[n.gateway] ? GW_COLOR[n.gateway] : "#9ca3af";
+    root.appendChild(svgEl("circle", { cx: n.x, cy: n.y, r: 6, fill: c, "fill-opacity": 0.85 }));
+  }
+}
+
+function renderPdr(history) {
+  const root = $("pdr-chart");
+  root.innerHTML = "";
+  if (!history.length) return;
+  const W = 600, H = 300, P = 36;
+  const maxT = Math.max(1, ...history.map(h => h.time));
+  const x = t => P + (t / maxT) * (W - 2 * P);
+  const y = p => H - P - p * (H - 2 * P);
+  root.appendChild(svgEl("line", { x1: P, y1: H - P, x2: W - P, y2: H - P, stroke: "#cbd5e1" }));
+  root.appendChild(svgEl("line", { x1: P, y1: P, x2: P, y2: H - P, stroke: "#cbd5e1" }));
+  const pts = history.map(h => x(h.time) + "," + y(h.pdr)).join(" ");
+  root.appendChild(svgEl("polyline", { points: pts, fill: "none", stroke: "#2b6cb0", "stroke-width": 2 }));
+}
+
+function barChart(rootId, entries, color) {
+  const root = $(rootId);
+  root.innerHTML = "";
+  const W = 600, H = 300, P = 36;
+  const max = Math.max(1, ...entries.map(e => e.v));
+  const n = entries.length;
+  const bw = (W - 2 * P) / n;
+  root.appendChild(svgEl("line", { x1: P, y1: H - P, x2: W - P, y2: H - P, stroke: "#cbd5e1" }));
+  entries.forEach((e, i) => {
+    const h = (e.v / max) * (H - 2 * P);
+    const x0 = P + i * bw + 4;
+    root.appendChild(svgEl("rect", { x: x0, y: H - P - h, width: bw - 8, height: h, fill: color }));
+    const t = svgEl("text", {
+      x: x0 + (bw - 8) / 2, y: H - P + 16, "text-anchor": "middle",
+      "font-size": 12, fill: "#475569",
+    });
+    t.textContent = e.k;
+    root.appendChild(t);
+  });
+}
+
+function renderRssi(nodes) {
+  const buckets = {};
+  for (let v = -130; v <= -70; v += 10) buckets[v] = 0;
+  for (const n of nodes) {
+    if (n.rssi == null) continue;
+    const b = Math.floor(n.rssi / 10) * 10;
+    if (buckets[b] !== undefined) buckets[b]++;
+  }
+  const entries = Object.keys(buckets).map(k => ({ k: k, v: buckets[k] }));
+  barChart("rssi-chart", entries, "#38a169");
+}
+
+function renderSf(nodes) {
+  const counts = {};
+  for (let sf = 7; sf <= 12; sf++) counts[sf] = 0;
+  for (const n of nodes) counts[n.sf] = (counts[n.sf] || 0) + 1;
+  const entries = [];
+  for (let sf = 7; sf <= 12; sf++) entries.push({ k: "SF" + sf, v: counts[sf] });
+  barChart("sf-chart", entries, "#805ad5");
+}
+
+function renderPackets(packets) {
+  const tb = $("packet-tbody");
+  tb.innerHTML = "";
+  for (const p of packets.slice(-30)) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>" + p.time.toFixed(2) + "</td>" +
+      "<td>" + p.event + "</td>" +
+      "<td>" + p.node + "</td>" +
+      "<td>" + p.sf + "</td>" +
+      "<td>" + (p.rssi == null ? "-" : p.rssi.toFixed(1)) + "</td>" +
+      "<td>" + (p.snr == null ? "-" : p.snr.toFixed(1)) + "</td>" +
+      "<td>" + (p.gateway || "-") + "</td>" +
+      "<td>" + (p.success == null ? "-" : (p.success ? "✓" : "✗")) + "</td>";
+    tb.appendChild(tr);
+  }
+}
+
+// ---------- 控制 ----------
+function tick() {
+  apiPost("/api/simulation/step?steps=" + STEP_PER_TICK)
+    .then(refresh)
+    .catch(e => console.error("tick error:", e));
+}
+
+function setAuto(on) {
+  if (on) {
+    if (autoTimer) return;
+    apiPost("/api/simulation/start").catch(() => {});
+    autoTimer = setInterval(tick, TICK_MS);
+  } else if (autoTimer) {
+    clearInterval(autoTimer);
+    autoTimer = null;
+  }
+}
+
+function bindControls() {
+  $("btn-start").onclick = () => apiPost("/api/simulation/start").then(refresh);
+  $("btn-pause").onclick = () => apiPost("/api/simulation/pause").then(refresh);
+  $("btn-step").onclick = () => apiPost("/api/simulation/step?steps=1").then(refresh);
+  $("btn-reset").onclick = () => apiPost("/api/simulation/reset").then(refresh);
+  $("chk-auto").onchange = (e) => setAuto(e.target.checked);
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  bindControls();
+  refresh();
+  setInterval(refresh, 1500);  // 基础轮询，保证手动操作后 KPI 即时刷新
+  if ($("chk-auto").checked) setAuto(true);
+});

@@ -4,12 +4,65 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LoRa 智慧农业监控平台</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="/dashboard.css" />
 </head>
 <body>
-  <h1>LoRa 智慧农业 / 工业物联网监控平台</h1>
-  <p>Sprint 4/5 将在此渲染：农场地图、传感器分布、实时数据、网络质量与电量。</p>
-  <div id="app"></div>
-  <script src="app.js"></script>
+  <header>
+    <div class="title">
+      <h1>LoRa 智慧农业 / 工业物联网 监控平台</h1>
+      <span id="state-badge" class="badge state-ready">ready</span>
+    </div>
+    <div class="controls">
+      <button id="btn-start">Start</button>
+      <button id="btn-pause">Pause</button>
+      <button id="btn-step">Step</button>
+      <button id="btn-reset">Reset</button>
+      <label class="auto"><input type="checkbox" id="chk-auto" checked /> 自动运行</label>
+    </div>
+  </header>
+
+  <main>
+    <section class="cards">
+      <div class="card"><div class="k">PDR</div><div class="v" id="kpi-pdr">–</div></div>
+      <div class="card"><div class="k">Throughput</div><div class="v" id="kpi-throughput">–</div></div>
+      <div class="card"><div class="k">Received</div><div class="v" id="kpi-received">–</div></div>
+      <div class="card"><div class="k">Lost</div><div class="v" id="kpi-lost">–</div></div>
+      <div class="card"><div class="k">Time</div><div class="v" id="kpi-time">–</div></div>
+      <div class="card"><div class="k">Pending</div><div class="v" id="kpi-pending">–</div></div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>网络拓扑（节点按选中网关着色）</h2>
+        <svg id="topo" viewBox="0 0 2000 2000" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+      <div class="panel">
+        <h2>PDR vs Time</h2>
+        <svg id="pdr-chart" viewBox="0 0 600 300" preserveAspectRatio="none"></svg>
+      </div>
+      <div class="panel">
+        <h2>RSSI 分布</h2>
+        <svg id="rssi-chart" viewBox="0 0 600 300" preserveAspectRatio="none"></svg>
+      </div>
+      <div class="panel">
+        <h2>SF 分布</h2>
+        <svg id="sf-chart" viewBox="0 0 600 300" preserveAspectRatio="none"></svg>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Packet 事件（最近 30）</h2>
+      <div class="table-wrap">
+        <table id="packet-table">
+          <thead>
+            <tr><th>time</th><th>event</th><th>node</th><th>sf</th><th>rssi</th><th>snr</th><th>gateway</th><th>success</th></tr>
+          </thead>
+          <tbody id="packet-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/dashboard.js"></script>
 </body>
 </html>
