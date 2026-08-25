@@ -4,10 +4,13 @@
 路由前缀统一为 /api，便于后续 Web Dashboard 与 MQTT 扩展。
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
+from .database import recorder
 from .engine import engine
 from .models import (
+    ExperimentEventOut,
+    ExperimentOut,
     GatewayOut,
     NodeOut,
     PacketRecordOut,
@@ -94,3 +97,19 @@ def timeline(bucket: float = Query(1.0, gt=0)):
 def export_json():
     """组合导出：status / nodes / gateways / statistics / packets / history。"""
     return engine.get_export()
+
+
+@router.get("/experiments", response_model=list[ExperimentOut])
+def list_experiments():
+    """已落盘实验列表（最新在前，不含 events 明细）。DB 禁用时返回空列表。"""
+    return recorder.list_experiments()
+
+
+@router.get("/experiments/{exp_id}", response_model=ExperimentOut)
+def get_experiment(exp_id: int):
+    """单条实验详情：元信息 + 终态 JSON + 全量 events（供回放 / 对比）。"""
+    exp = recorder.get_experiment(exp_id)
+    if exp is None:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    exp["events"] = recorder.get_experiment_events(exp_id)
+    return exp

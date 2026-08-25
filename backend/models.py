@@ -59,3 +59,32 @@ class TimelineOut(BaseModel):
     received: int                     # 桶内成功尝试数
     lost: int                        # 桶内失败尝试数
     pdr: float                       # 桶内瞬时 PDR = received/(received+lost)
+
+
+class ExperimentEventOut(BaseModel):
+    id: int
+    seq: int
+    time: float
+    event: str | None = None          # TRANSMIT / RETRANSMIT
+    node: str | None = None
+    sf: int | None = None
+    rssi: float | None = None
+    snr: float | None = None
+    gateway: str | None = None
+    success: bool | None = None        # 本次尝试成败（网关计数差分得到）
+
+
+class ExperimentOut(BaseModel):
+    id: int
+    seed: int | None = None
+    node_count: int | None = None
+    duration: float | None = None
+    area_size: float | None = None
+    gateway_cfg: list | None = None    # 网关拓扑（JSON 反序列化）
+    adr_enabled: bool = False
+    created_at: str | None = None
+    finalized: bool = False
+    statistics: dict | None = None     # 终态统计（JSON 反序列化）
+    nodes: list | None = None          # 终态节点快照（JSON 反序列化）
+    gateways: list | None = None       # 终态网关快照（JSON 反序列化）
+    events: list[ExperimentEventOut] | None = None  # 全量逐事件记录

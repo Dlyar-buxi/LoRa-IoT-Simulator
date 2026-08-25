@@ -10,6 +10,8 @@ Sprint 5.1 新增：
 - telemetry sink：engine.step() 每产生一条记录，同时发布到 MQTT Broker
   （外部遥测出口，可选）并广播给所有 WS 客户端。
 - MQTT 经 mqtt_client（懒连接，broker 不可用静默降级）。
+- SQLite 实验记录器（Sprint 5.2）：telemetry sink 第三出口，将每条遥测记录
+  落盘为可回放 / 可对比的实验（experiments + events），DB 不可用静默降级。
 """
 
 import asyncio
@@ -21,8 +23,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
-from .engine import engine
+from simulator import config
+from .engine import engine, GATEWAY_POSITIONS
 from .mqtt_client import mqtt
+from .database import recorder
 from .routes import router
 
 logging.basicConfig(level=logging.INFO)
@@ -73,13 +77,57 @@ class WsManager:
 ws_manager = WsManager()
 
 
-# ---------- telemetry sink（Engine -> MQTT + WS）----------
+# ---------- telemetry sink（Engine -> MQTT + WS + SQLite）----------
 def telemetry_sink(record: dict):
     # 1) MQTT 外部出口（broker 不可用时 publish 静默返回 False）
     mqtt.publish("lora/device/data", record, qos=0, retain=False)
     # 2) WebSocket 实时广播给 Dashboard（经主事件循环桥接）
     if ws_manager.has_clients():
         ws_manager.broadcast_sync(json.dumps(record, ensure_ascii=False))
+    # 3) SQLite 实验记录器（DB 不可用 / 写入异常时 record_event 静默返回 False）
+    recorder.record_event(record)
+
+
+# ---------- 实验记录生命周期（Adapter 层，不修改 engine.py）----------
+def _experiment_meta():
+    """从 engine / config 采集实验元信息（不反向依赖仿真代码）。"""
+    return {
+        "seed": engine.seed,
+        "node_count": config.NODE_COUNT,
+        "duration": engine.duration,
+        "area_size": config.AREA_SIZE,
+        "adr_enabled": config.ADR_ENABLED,
+        "gateway_cfg": GATEWAY_POSITIONS,
+    }
+
+
+def _collect_final_state():
+    """终态采集回调：拉 engine 当前快照供 finalize 落盘。"""
+    try:
+        return {
+            "final_stats": engine.get_statistics(),
+            "nodes": engine.get_nodes(),
+            "gateways": engine.get_gateways(),
+        }
+    except Exception:
+        return {}
+
+
+def _finalize_current_experiment():
+    recorder.finalize_experiment(**_collect_final_state())
+
+
+def _begin_new_experiment():
+    recorder.begin_experiment(_experiment_meta())
+
+
+# reset -> 关闭旧实验并开新实验（不覆盖旧实验）；engine.py 文件保持零修改
+_orig_reset = engine.reset
+def _reset():
+    _finalize_current_experiment()
+    _orig_reset()
+    _begin_new_experiment()
+engine.reset = _reset
 
 
 # ---------- 生命周期：捕获主循环 + 懒连 MQTT ----------
@@ -87,9 +135,14 @@ def telemetry_sink(record: dict):
 async def lifespan(app: FastAPI):
     ws_manager.attach_loop(asyncio.get_running_loop())
     mqtt.connect()  # 失败静默降级，不影响应用启动
+    recorder.connect()  # 失败静默降级（DB_ENABLED=false 或文件不可写）
+    recorder.set_finalizer(_collect_final_state)
+    _begin_new_experiment()  # 首实验上下文（engine 已 ready）
     engine.set_telemetry_sink(telemetry_sink)
     yield
     engine.set_telemetry_sink(None)
+    _finalize_current_experiment()  # 进程退出前收尾
+    recorder.close()
     mqtt.disconnect()
 
 
