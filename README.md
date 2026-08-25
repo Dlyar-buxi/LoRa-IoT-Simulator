@@ -1,5 +1,6 @@
 # LoRa IoT Simulator
 
+![Tests](https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/actions/workflows/test.yml/badge.svg)
 [![Release](https://img.shields.io/github/v/release/Dlyar-buxi/LoRa-IoT-Simulator)](https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/releases)
 
 A full-stack LoRa LPWAN network simulation & monitoring platform — from embedded
