@@ -52,7 +52,7 @@ class SensorNode:
         """根据当前传感数据构造一个待发送数据包。"""
         data = self.generate_data()
         return Packet(
-            device_id=self.node_id,
+            node_id=self.node_id,
             timestamp=timestamp if timestamp is not None else time.time(),
             payload=data,
             sf=self.sf,

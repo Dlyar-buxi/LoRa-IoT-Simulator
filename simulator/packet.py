@@ -1,37 +1,48 @@
-"""LoRa 通信数据包。
-
-节点构造时只填充发送侧字段；
-rssi / snr / success 由信道模型与网关在传输过程中填充。
-"""
-
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+import time
 
 
 @dataclass
 class Packet:
-    device_id: str
-    timestamp: float
-    payload: Dict[str, Any]
+    node_id: str
+    payload: dict
     sf: int
     tx_power: float
-    x: float = 0.0
-    y: float = 0.0
-    rssi: Optional[float] = None
-    snr: Optional[float] = None
-    success: Optional[bool] = None
 
-    def to_dict(self) -> Dict[str, Any]:
-        """转为可序列化字典（方便后续走 MQTT / JSON）。"""
+    timestamp: float = field(
+        default_factory=time.time
+    )
+
+    # physical layer
+    frequency: int = 868000000
+    bandwidth: int = 125000
+    coding_rate: str = "4/5"
+
+    airtime: float = 0.0
+
+    # position
+    x: float = 0
+    y: float = 0
+
+    # channel result
+    distance: float = 0
+    gateway_id: str | None = None
+
+    rssi: float | None = None
+    snr: float | None = None
+
+    collision: bool = False
+    success: bool = False
+
+    def to_dict(self):
         return {
-            "device_id": self.device_id,
-            "timestamp": self.timestamp,
+            "node_id": self.node_id,
             "payload": self.payload,
             "sf": self.sf,
             "tx_power": self.tx_power,
-            "x": self.x,
-            "y": self.y,
+            "distance": self.distance,
             "rssi": self.rssi,
             "snr": self.snr,
-            "success": self.success,
+            "collision": self.collision,
+            "success": self.success
         }

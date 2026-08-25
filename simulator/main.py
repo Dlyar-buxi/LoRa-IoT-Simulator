@@ -55,7 +55,7 @@ def main():
               f"T={data['temperature']:5.1f}C "
               f"H={data['humidity']:5.1f}% "
               f"Soil={data['soil']:5.1f}%")
-        assert pkt.device_id == n.node_id
+        assert pkt.node_id == n.node_id
         assert set(pkt.payload) == {"temperature", "humidity", "soil", "light", "co2"}
 
     # 简单能耗验证
