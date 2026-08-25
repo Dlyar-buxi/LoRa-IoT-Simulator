@@ -1,5 +1,7 @@
 # LoRa IoT Simulator
 
+![Tests](https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/actions/workflows/test.yml/badge.svg)
+
 A full-stack LoRa LPWAN network simulation & monitoring platform — from embedded
 sensor nodes, through LoRa PHY/MAC and gateways, all the way to a live Web
 dashboard with MQTT telemetry export and SQLite experiment persistence.
