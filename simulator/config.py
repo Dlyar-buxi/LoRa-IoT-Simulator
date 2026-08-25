@@ -23,6 +23,18 @@ PACKET_INTERVAL = 300     # 发送周期（秒）= 5 分钟一次上报
 NOISE_FLOOR = -120.0      # 噪声底（dBm）
 COLLISION_SNR_THRESHOLD = 6.0   # 可成功解调所需最低 SNR（dB）
 
+# ---------- 重传 / 退避（Sprint 4.1） ----------
+MAX_RETRY = 3             # 单个业务包最大重传次数
+BACKOFF_MIN = 1.0         # 随机退避下限（秒）
+BACKOFF_MAX = 5.0         # 随机退避上限（秒）
+
+# ---------- ADR 自适应速率（Sprint 4.2） ----------
+ADR_ENABLED  = True       # 是否开启自适应速率
+ADR_MIN_SF   = 7          # SF 下限（近距离、高速）
+ADR_MAX_SF   = 12         # SF 上限（远距离、高可靠）
+ADR_HIGH_SNR = 10         # SNR 高于此值 -> 降低 SF（提速/省电）
+ADR_LOW_SNR  = 5          # SNR 低于此值 -> 提高 SF（提可靠）
+
 # ---------- 能量 / 电池模型 ----------
 BATTERY_CAPACITY_MAH = 2000.0   # 电池容量 mAh
 TX_CURRENT_MA = 120.0           # 发射电流 mA

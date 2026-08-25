@@ -1,18 +1,23 @@
 """
 LoRa MAC State Machine
 
-Sprint 3.1.1
+Sprint 3.1.1: 状态管理 / 发送流程 / 成功确认 / 失败重试
+Sprint 4.1:    随机退避（WAIT_BACKOFF）/ 配置驱动 MAX_RETRY
 
-实现:
-- 状态管理
-- 发送流程
-- 成功确认
-- 失败重试
-
+状态机（双路径兼容）：
+  IDLE --start_transmission--> TRANSMITTING
+  TRANSMITTING --handle_success--> IDLE
+  TRANSMITTING --handle_failure--> RETRY            (retry_count <= MAX_RETRY)
+  TRANSMITTING --handle_failure--> IDLE            (超次丢弃，retry_count 复位)
+  RETRY --start_backoff--> WAIT_BACKOFF
+  WAIT_BACKOFF --retry_transmission--> TRANSMITTING
+  RETRY --retry_transmission--> TRANSMITTING        (兼容 Sprint 3 旧测试)
 """
 
 
 from enum import Enum, auto
+
+from simulator import config
 
 
 
@@ -25,6 +30,8 @@ class MacState(Enum):
     WAIT_ACK = auto()
 
     RETRY = auto()
+
+    WAIT_BACKOFF = auto()
 
 
 
@@ -39,7 +46,7 @@ class LoRaMAC:
 
         self.retry_count = 0
 
-        self.max_retry = 3
+        self.max_retry = config.MAX_RETRY
 
         self.current_packet = None
 
@@ -78,7 +85,6 @@ class LoRaMAC:
         self.state = MacState.TRANSMITTING
 
 
-
         return self.current_packet
 
 
@@ -99,7 +105,7 @@ class LoRaMAC:
     def handle_success(self):
 
         """
-        发送成功
+        发送成功：复位状态机，retry_count 清零（协议状态保持干净）
         """
 
 
@@ -113,9 +119,8 @@ class LoRaMAC:
     def handle_failure(self):
 
         """
-        发送失败
-
-        进入重试
+        发送失败：retry_count 自增，
+        未超上限进入 RETRY，超上限丢弃并复位。
         """
 
 
@@ -136,14 +141,28 @@ class LoRaMAC:
 
 
 
-    def retry_transmission(self):
+    def start_backoff(self):
 
         """
-        重传
+        进入随机退避等待：RETRY -> WAIT_BACKOFF。
         """
 
 
         if self.state == MacState.RETRY:
 
+            self.state = MacState.WAIT_BACKOFF
+
+
+
+    def retry_transmission(self):
+
+        """
+        重传：RETRY 或 WAIT_BACKOFF 都进入发送态。
+        兼容 Sprint 3 旧测试（RETRY -> TRANSMITTING），
+        同时支持 Sprint 4.1 新流程（WAIT_BACKOFF -> TRANSMITTING）。
+        """
+
+
+        if self.state in (MacState.RETRY, MacState.WAIT_BACKOFF):
 
             self.state = MacState.TRANSMITTING

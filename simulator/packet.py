@@ -37,6 +37,7 @@ class Packet:
 
     collision: bool = False
     success: bool = False
+    retry_count: int = 0
 
     def to_dict(self):
         return {
@@ -50,5 +51,6 @@ class Packet:
             "rssi": self.rssi,
             "snr": self.snr,
             "collision": self.collision,
-            "success": self.success
+            "success": self.success,
+            "retry_count": self.retry_count,
         }

@@ -31,6 +31,9 @@ class SensorNode:
         self.tx_power = tx_power if tx_power is not None else config.TX_POWER
         self.send_interval = config.PACKET_INTERVAL        # 发送周期（秒）
         self.last_seen = None                              # 最近成功通信时间
+        self.last_rssi = None                             # 最近上行 RSSI（ADR 反馈）
+        self.last_snr = None                              # 最近上行 SNR（ADR 反馈）
+        self.selected_gateway = None                      # 最近一次选中的网关 id（Sprint 4.3）
         self.online = True                                # 是否在线
 
         # 为每个传感器绑定独立随机源（基于节点 seed，保证可复现）
