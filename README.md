@@ -137,6 +137,82 @@ simulator/simulation.py
 - The simulation core has **zero knowledge** of MQTT, WebSocket, or SQLite — it only
   calls the injected sink during `step()`.
 
+## Quick Demo
+
+The fastest way to see the simulator running **with sample data** — no code edits, no manual configuration.
+
+### Option 1: Docker Demo (recommended)
+
+Clone and start the full stack with a pre-seeded demo LoRa network:
+
+```bash
+git clone https://github.com/Dlyar-buxi/LoRa-IoT-Simulator.git
+cd LoRa-IoT-Simulator
+docker compose --profile demo up --build
+```
+
+Then open the dashboard:
+
+```
+http://localhost:8000
+```
+
+This single command:
+- starts the FastAPI backend and the MQTT broker,
+- generates a demo network (20 nodes, 2 gateways, 400 m × 400 m area, seed 1),
+- writes the sample experiment into the shared `experiments-db` volume,
+- populates the dashboard with live, ready-to-explore data.
+
+### Option 2: Local Python Demo
+
+No Docker? Generate the same demo headlessly:
+
+```bash
+python -m pip install -r requirements.txt
+python scripts/run_demo.py
+```
+
+Two artifacts are written next to the repo:
+
+```
+demo.db          # SQLite experiment (20 nodes, 2 gateways, area 400, seed 1)
+demo_report.md   # Markdown summary: PDR / throughput / SF distribution
+```
+
+The `demo_report.md` is a standalone summary — open it directly, no server needed.
+To explore the data live in the dashboard, start the backend:
+
+```bash
+uvicorn backend.main:app --reload
+# open http://127.0.0.1:8000/
+```
+
+> The dashboard reads the default `experiments.db`. To view the demo you just
+> generated instead, set `DB_PATH=demo.db` (Linux/macOS) or
+> `$env:DB_PATH="demo.db"` (PowerShell) before the `uvicorn` command above.
+
+### Demo vs Production
+
+| | Command | What you get |
+|---|---|---|
+| **Production** | `docker compose up --build` | Backend + broker only; you configure and start runs from the dashboard. No sample data. |
+| **Demo** | `docker compose --profile demo up --build` | Same stack, plus a one-shot `demo-init` service that seeds a sample experiment on first launch. |
+
+The demo is **opt-in** via the `demo` Docker Compose profile. By default
+`docker compose up --build` stays clean — your environment is never populated with
+demo artifacts unless you explicitly add `--profile demo`.
+
+- In Docker, `demo-init` runs **once** (no restart), writes into the same
+  `experiments-db` volume the backend reads, then exits. The seed data lives only
+  in that volume — it is never committed to the repository and is wiped with
+  `docker compose down -v`.
+- Locally, `run_demo.py` writes `demo.db` (git-ignored), **not** the default
+  `experiments.db`, so your production database file is never touched.
+
+> Want to customize or regenerate the demo? See
+> [Automated Demo](#automated-demo-sprint-60) for `generate_experiment.py`
+> options and report export.
+
 ## Quick Start
 
 Requirements: Python 3.12+
@@ -256,7 +332,7 @@ Headless scripts in `scripts/` run a full simulation and export a report
 
 ```bash
 # One-command local demo: generates demo.db and demo_report.md
-bash scripts/run_demo.sh
+python scripts/run_demo.py
 
 # Run a custom headless experiment (records to a SQLite file)
 python scripts/generate_experiment.py \
@@ -341,7 +417,7 @@ LoRa-IoT-Simulator/
 ├── docs/             # architecture.md, api.md
 ├── examples/         # curl scripts & MQTT subscriber guide
 ├── screenshots/      # demo captures
-├── scripts/          # headless CLI: generate_experiment.py, export_report.py, run_demo.sh
+├── scripts/          # headless CLI: generate_experiment.py, export_report.py, run_demo.py
 ├── .github/          # workflows (CI) + issue/PR templates
 ├── Dockerfile        # backend image (python:3.12-slim)
 ├── .dockerignore
