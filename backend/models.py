@@ -88,3 +88,23 @@ class ExperimentOut(BaseModel):
     nodes: list | None = None          # 终态节点快照（JSON 反序列化）
     gateways: list | None = None       # 终态网关快照（JSON 反序列化）
     events: list[ExperimentEventOut] | None = None  # 全量逐事件记录
+
+
+class ExperimentConfigIn(BaseModel):
+    """POST /api/simulation/config 请求体（全部可选，缺省沿用当前生效值）。"""
+    node_count: int | None = None
+    area_size: float | None = None
+    gateways: list[list] | None = None   # [[id, x, y], ...]
+    seed: int | None = None
+    duration: float | None = None
+    adr_enabled: bool | None = None
+
+
+class ExperimentConfigOut(BaseModel):
+    """当前生效的实验参数（GET /api/simulation/config 响应）。"""
+    node_count: int
+    area_size: float
+    gateways: list[list]
+    seed: int
+    duration: float
+    adr_enabled: bool

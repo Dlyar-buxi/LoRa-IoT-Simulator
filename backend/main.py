@@ -12,6 +12,9 @@ Sprint 5.1 新增：
 - MQTT 经 mqtt_client（懒连接，broker 不可用静默降级）。
 - SQLite 实验记录器（Sprint 5.2）：telemetry sink 第三出口，将每条遥测记录
   落盘为可回放 / 可对比的实验（experiments + events），DB 不可用静默降级。
+- 参数化实验平台（Sprint 5.3）：engine.configure(...) 注入 node_count / area_size /
+  gateway_positions / seed / duration / adr_enabled；Simulation 核心与 config.py 冻结不动，
+  ADR 经 _build 运行期绑定 config.ADR_ENABLED。
 """
 
 import asyncio
@@ -23,8 +26,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
-from simulator import config
-from .engine import engine, GATEWAY_POSITIONS
+from .engine import engine
 from .mqtt_client import mqtt
 from .database import recorder
 from .routes import router
@@ -90,14 +92,14 @@ def telemetry_sink(record: dict):
 
 # ---------- 实验记录生命周期（Adapter 层，不修改 engine.py）----------
 def _experiment_meta():
-    """从 engine / config 采集实验元信息（不反向依赖仿真代码）。"""
+    """从 engine 实例采集实验元信息（参数化后反映真实拓扑，不读冻结 config）。"""
     return {
         "seed": engine.seed,
-        "node_count": config.NODE_COUNT,
+        "node_count": engine.node_count,
         "duration": engine.duration,
-        "area_size": config.AREA_SIZE,
-        "adr_enabled": config.ADR_ENABLED,
-        "gateway_cfg": GATEWAY_POSITIONS,
+        "area_size": engine.area_size,
+        "adr_enabled": engine.adr_enabled,
+        "gateway_cfg": engine.gateway_positions,
     }
 
 
@@ -129,6 +131,14 @@ def _reset():
     _begin_new_experiment()
 engine.reset = _reset
 
+# configure -> 关闭旧实验并开新实验（不覆盖旧实验）；engine.py 文件保持零修改
+_orig_configure = engine.configure
+def _configure(*args, **kwargs):
+    _finalize_current_experiment()
+    _orig_configure(*args, **kwargs)
+    _begin_new_experiment()
+engine.configure = _configure
+
 
 # ---------- 生命周期：捕获主循环 + 懒连 MQTT ----------
 @asynccontextmanager
@@ -149,7 +159,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="LoRa-IoT-Simulator Backend",
     description="LoRa 智慧农业 / 工业物联网 网络仿真与监控平台 — REST API + WebSocket + Dashboard",
-    version="5.1.0",
+    version="5.3.0",
     lifespan=lifespan,
 )
 

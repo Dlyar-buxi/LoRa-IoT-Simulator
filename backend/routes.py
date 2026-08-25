@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException, Query
 from .database import recorder
 from .engine import engine
 from .models import (
+    ExperimentConfigIn,
+    ExperimentConfigOut,
     ExperimentEventOut,
     ExperimentOut,
     GatewayOut,
@@ -20,6 +22,52 @@ from .models import (
 )
 
 router = APIRouter(prefix="/api", tags=["simulation"])
+
+
+@router.get("/simulation/config", response_model=ExperimentConfigOut)
+def get_simulation_config():
+    """返回当前生效的实验参数（下一次 run 将使用的拓扑）。"""
+    return engine.get_config()
+
+
+@router.post("/simulation/config", response_model=ExperimentConfigOut)
+def set_simulation_config(cfg: ExperimentConfigIn):
+    """配置下一次 simulation run 的拓扑参数（全部字段可选，缺省沿用当前）。
+
+    校验失败返回 400：node_count<=0 / gateway 为空 / id 重复 / 坐标超出区域。
+    """
+    # 计算本次生效的区域（用于坐标校验：优先用请求中的 area_size）
+    eff_area = cfg.area_size if cfg.area_size is not None else engine.area_size
+
+    if cfg.node_count is not None and cfg.node_count <= 0:
+        raise HTTPException(status_code=400, detail="node_count must be > 0")
+    if cfg.gateways is not None:
+        if not cfg.gateways:
+            raise HTTPException(status_code=400, detail="gateways must be non-empty")
+        ids = [g[0] for g in cfg.gateways]
+        if len(ids) != len(set(ids)):
+            raise HTTPException(status_code=400, detail="gateway ids must be unique")
+        for g in cfg.gateways:
+            if len(g) < 3:
+                raise HTTPException(
+                    status_code=400, detail="gateway must be [id, x, y]"
+                )
+            x, y = g[1], g[2]
+            if not (0 <= x <= eff_area and 0 <= y <= eff_area):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"gateway {g[0]} coords ({x},{y}) out of area [0,{eff_area}]",
+                )
+
+    engine.configure(
+        node_count=cfg.node_count,
+        area_size=cfg.area_size,
+        gateways=cfg.gateways,
+        seed=cfg.seed,
+        duration=cfg.duration,
+        adr_enabled=cfg.adr_enabled,
+    )
+    return engine.get_config()
 
 
 @router.get("/simulation/status", response_model=StatusOut)

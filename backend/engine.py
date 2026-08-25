@@ -29,13 +29,35 @@ GATEWAY_POSITIONS = [
     ("GW002", 1500, 1500),
 ]
 
+# 在导入期捕获 config 默认 ADR（运行期 _build 会按实验重绑 config.ADR_ENABLED，
+# 此处锁定「文件默认」，避免默认构造行为随运行期绑定漂移）。
+DEFAULT_ADR_ENABLED = config.ADR_ENABLED
+
 
 class SimulationEngine:
     """交互式仿真引擎：构建即就绪，按调用方节奏 step 推进。"""
 
-    def __init__(self, duration=60.0, seed=None):
+    def __init__(
+        self,
+        duration=60.0,
+        seed=None,
+        node_count=None,
+        area_size=None,
+        gateway_positions=None,
+        adr_enabled=None,
+    ):
+        # 参数化实验入口：所有拓扑参数默认沿用冻结 config 的当前值，
+        # 单例 SimulationEngine() 无参构造行为完全不变（200/2/2000/seed42/60s/ADR）。
         self.duration = duration
         self.seed = seed if seed is not None else config.SEED
+        self.node_count = node_count if node_count is not None else config.NODE_COUNT
+        self.area_size = area_size if area_size is not None else config.AREA_SIZE
+        self.gateway_positions = (
+            gateway_positions if gateway_positions is not None else GATEWAY_POSITIONS
+        )
+        self.adr_enabled = (
+            adr_enabled if adr_enabled is not None else DEFAULT_ADR_ENABLED
+        )
         self.sim = None
         # 状态机：idle(未建) -> ready(已建未跑) -> running <-> paused -> finished
         self.state = "idle"
@@ -52,24 +74,61 @@ class SimulationEngine:
         nodes = [
             SensorNode(
                 f"Node{i + 1:03}",
-                rng.uniform(0, config.AREA_SIZE),
-                rng.uniform(0, config.AREA_SIZE),
+                rng.uniform(0, self.area_size),
+                rng.uniform(0, self.area_size),
             )
-            for i in range(config.NODE_COUNT)
+            for i in range(self.node_count)
         ]
         gateways = [
-            Gateway(gid, x, y) for gid, x, y in GATEWAY_POSITIONS
+            Gateway(gid, x, y) for gid, x, y in self.gateway_positions
         ]
         return nodes, gateways
 
     def _build(self):
-        """构建仿真并排程，但**不运行**（交互式前置）。"""
+        """构建仿真并排程，但**不运行**（交互式前置）。
+
+        ADR 运行期绑定：每次重建都把 config.ADR_ENABLED 重新绑定为本实验值，
+        避免不同实验之间 ADR 开关串味（不修改冻结 config.py 文件 / simulation.py）。
+        """
+        config.ADR_ENABLED = self.adr_enabled
         nodes, gateways = self._build_topology()
         self.sim = Simulation(nodes, gateways, self.duration)
         self._node_map = {n.node_id: n for n in nodes}
         self._gw_map = {g.id: g for g in gateways}
         self.history = []
         self.state = "ready"
+
+    # ---------- 参数化实验入口 ----------
+
+    def configure(
+        self,
+        node_count=None,
+        area_size=None,
+        gateways=None,
+        seed=None,
+        duration=None,
+        adr_enabled=None,
+    ):
+        """更新实验参数并重建拓扑（等价「参数化 reset」，回到 ready 状态）。
+
+        - 仅更新显式传入的参数，其余沿用当前实例值。
+        - 不创建第二个 engine；不影响已设置的 telemetry sink。
+        - 每次重建都重新绑定 config.ADR_ENABLED（见 _build）。
+        """
+        if node_count is not None:
+            self.node_count = node_count
+        if area_size is not None:
+            self.area_size = area_size
+        if gateways is not None:
+            self.gateway_positions = gateways
+        if seed is not None:
+            self.seed = seed
+        if duration is not None:
+            self.duration = duration
+        if adr_enabled is not None:
+            self.adr_enabled = adr_enabled
+        self._build()
+        return self.state
 
     # ---------- 生命周期（状态机）----------
 
@@ -181,6 +240,17 @@ class SimulationEngine:
             "generated": stats["generated"],
             "received": stats["received"],
             "lost": stats["lost"],
+        }
+
+    def get_config(self):
+        """返回当前生效的实验参数（供 GET /api/simulation/config）。"""
+        return {
+            "node_count": self.node_count,
+            "area_size": self.area_size,
+            "gateways": [list(g) for g in self.gateway_positions],
+            "seed": self.seed,
+            "duration": self.duration,
+            "adr_enabled": self.adr_enabled,
         }
 
     def get_nodes(self):
