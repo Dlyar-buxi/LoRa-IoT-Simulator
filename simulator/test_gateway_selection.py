@@ -17,39 +17,43 @@ def make_node(x, y):
     return SensorNode(f"N-{x}-{y}", x, y, seed=1)
 
 
-gw1 = Gateway("GW001", 100, 100)
-gw2 = Gateway("GW002", 1900, 1900)
-gateways = [gw1, gw2]
+def test_gateway_selection():
+    gw1 = Gateway("GW001", 100, 100)
+    gw2 = Gateway("GW002", 1900, 1900)
+    gateways = [gw1, gw2]
+
+    print("===== Gateway Selection Test =====")
+    print()
+
+    # Case1: 节点靠近 GW001 -> 高 RSSI -> GW001
+    random.seed(42)
+    node1 = make_node(200, 200)
+    sel1 = select_best_gateway(node1, gateways, LoRaChannel())
+    print("Case1:")
+    print("Selected:", sel1.id)
+    print()
+    assert sel1.id == "GW001"
+
+    # Case2: 节点靠近 GW002 -> 高 RSSI -> GW002
+    random.seed(42)
+    node2 = make_node(1800, 1800)
+    sel2 = select_best_gateway(node2, gateways, LoRaChannel())
+    print("Case2:")
+    print("Selected:", sel2.id)
+    print()
+    assert sel2.id == "GW002"
+
+    # Case3: 等距 -> shadow 决定，固定随机使 RSSI 较高方（GW001）确定性胜出
+    random.seed(1)
+    node3 = make_node(1000, 1000)
+    sel3 = select_best_gateway(node3, gateways, LoRaChannel())
+    print("Case3:")
+    print("Selected:", sel3.id)
+    print()
+    assert sel3.id == "GW001"
+
+    print("Gateway Selection PASS")
 
 
-print("===== Gateway Selection Test =====")
-print()
-
-# Case1: 节点靠近 GW001 -> 高 RSSI -> GW001
-random.seed(42)
-node1 = make_node(200, 200)
-sel1 = select_best_gateway(node1, gateways, LoRaChannel())
-print("Case1:")
-print("Selected:", sel1.id)
-print()
-assert sel1.id == "GW001"
-
-# Case2: 节点靠近 GW002 -> 高 RSSI -> GW002
-random.seed(42)
-node2 = make_node(1800, 1800)
-sel2 = select_best_gateway(node2, gateways, LoRaChannel())
-print("Case2:")
-print("Selected:", sel2.id)
-print()
-assert sel2.id == "GW002"
-
-# Case3: 等距 -> shadow 决定，固定随机使 RSSI 较高方（GW001）确定性胜出
-random.seed(1)
-node3 = make_node(1000, 1000)
-sel3 = select_best_gateway(node3, gateways, LoRaChannel())
-print("Case3:")
-print("Selected:", sel3.id)
-print()
-assert sel3.id == "GW001"
-
-print("Gateway Selection PASS")
+if __name__ == "__main__":
+    test_gateway_selection()
