@@ -20,6 +20,10 @@ class Packet:
 
     airtime: float = 0.0
 
+    # transmission timing (Sprint 3.2)
+    tx_start_time: float = 0.0
+    tx_end_time: float = 0.0
+
     # position
     x: float = 0
     y: float = 0
@@ -41,6 +45,8 @@ class Packet:
             "sf": self.sf,
             "tx_power": self.tx_power,
             "distance": self.distance,
+            "tx_start_time": self.tx_start_time,
+            "tx_end_time": self.tx_end_time,
             "rssi": self.rssi,
             "snr": self.snr,
             "collision": self.collision,
