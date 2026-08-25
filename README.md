@@ -8,6 +8,10 @@ dashboard with MQTT telemetry export and SQLite experiment persistence.
 > The backend is a pure **Adapter** layer: the simulation core never imports any
 > backend or frontend code, and has zero knowledge of MQTT, WebSocket, or SQLite.
 
+## Dashboard Preview
+
+![LoRa IoT Simulator dashboard](screenshots/dashboard.png)
+
 ## Features
 
 - **Discrete-event LoRa simulation** — heap-based event scheduler (`heapq` DES).
