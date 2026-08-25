@@ -22,6 +22,22 @@
   </header>
 
   <main>
+    <section class="panel config-panel">
+      <h2>Experiment Configuration</h2>
+      <div class="config-grid">
+        <label>Nodes<input type="number" id="cfg-node_count" min="1" step="1" value="200" /></label>
+        <label>Area size<input type="number" id="cfg-area_size" min="100" step="50" value="2000" /></label>
+        <label>Seed<input type="number" id="cfg-seed" step="1" value="42" /></label>
+        <label>Duration (s)<input type="number" id="cfg-duration" min="1" step="1" value="60" /></label>
+        <label>Gateways (1–4)<input type="number" id="cfg-gateway_count" min="1" max="4" step="1" value="2" /></label>
+        <label class="cfg-adr"><input type="checkbox" id="cfg-adr_enabled" checked /> ADR enabled</label>
+      </div>
+      <div class="config-actions">
+        <button id="btn-apply" type="button">Apply</button>
+        <span id="cfg-msg" class="cfg-msg" role="status" aria-live="polite"></span>
+      </div>
+    </section>
+
     <section class="cards">
       <div class="card"><div class="k">PDR</div><div class="v" id="kpi-pdr">–</div></div>
       <div class="card"><div class="k">Throughput</div><div class="v" id="kpi-throughput">–</div></div>
