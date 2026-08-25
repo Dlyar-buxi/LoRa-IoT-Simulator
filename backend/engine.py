@@ -275,8 +275,8 @@ class SimulationEngine:
             s = gw.statistics()
             result.append({
                 "id": gw.id,
-                "received": s["received"],
-                "avg_rssi": s["avg_rssi"],
+                "received": s.get("received", 0),
+                "avg_rssi": s.get("avg_rssi"),
                 "x": gw.x,
                 "y": gw.y,
             })
