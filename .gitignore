@@ -6,6 +6,13 @@ __pycache__/
 venv/
 env/
 
+# 测试 / 覆盖率产物
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+
 # 数据库
 *.db
 *.sqlite
@@ -15,3 +22,7 @@ env/
 .idea/
 .vscode/
 .DS_Store
+
+# 日志
+*.log
+

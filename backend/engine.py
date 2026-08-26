@@ -23,16 +23,16 @@ v1 拓扑（网关位置硬编码，避免改动已冻结的 simulator/config.py
 """
 
 import collections
+import contextlib
 import heapq
 import os
 import random
 import threading
 
+from gateway.gateway import Gateway
 from simulator import config
 from simulator.node import SensorNode
 from simulator.simulation import Simulation
-from gateway.gateway import Gateway
-
 
 # v1 固定拓扑：2 网关（不改冻结的 config.py）
 GATEWAY_POSITIONS = [
@@ -90,8 +90,8 @@ class SimulationEngine:
             self.history: collections.deque = collections.deque(maxlen=HISTORY_MAX_LEN)
         else:
             self.history: collections.deque = collections.deque()
-        self._node_map = {}        # node_id -> SensorNode（O(1) 查找）
-        self._gw_map = {}          # gateway id -> Gateway（O(1) 查找）
+        self._node_map = {}  # node_id -> SensorNode（O(1) 查找）
+        self._gw_map = {}  # gateway id -> Gateway（O(1) 查找）
         self._telemetry_sink = None  # 可选遥测出口（单 callable，默认 None）
         # P0-4: 生命周期钩子，替代外部 monkey-patch
         #   pre_* : _build 之前执行（如 finalize 旧实验——需要读旧的 engine 状态）
@@ -139,10 +139,8 @@ class SimulationEngine:
     def _run_hooks(self, hooks):
         """执行一组钩子，任何异常内部吞掉（静默降级，不中断仿真）。"""
         for fn in hooks:
-            try:
+            with contextlib.suppress(Exception):
                 fn()
-            except Exception:
-                pass
 
     # ---------- 拓扑构建（只读，不运行）----------
 
@@ -156,9 +154,7 @@ class SimulationEngine:
             )
             for i in range(self.node_count)
         ]
-        gateways = [
-            Gateway(gid, x, y) for gid, x, y in self.gateway_positions
-        ]
+        gateways = [Gateway(gid, x, y) for gid, x, y in self.gateway_positions]
         return nodes, gateways
 
     def _build(self):
@@ -326,10 +322,8 @@ class SimulationEngine:
                     # 遥测出口：append history 后立即外发（MQTT/WS），异常不影响仿真
                     # 注意：sink 内若调用 engine.get_*，因 RLock 可重入，不会死锁
                     if self._telemetry_sink is not None:
-                        try:
+                        with contextlib.suppress(Exception):
                             self._telemetry_sink(record)
-                        except Exception:
-                            pass
                 executed += 1
 
             if not self.sim.scheduler.event_queue:
@@ -386,13 +380,15 @@ class SimulationEngine:
             result = []
             for gw in self.sim.gateways:
                 s = gw.statistics()
-                result.append({
-                    "id": gw.id,
-                    "received": s.get("received", 0),
-                    "avg_rssi": s.get("avg_rssi"),
-                    "x": gw.x,
-                    "y": gw.y,
-                })
+                result.append(
+                    {
+                        "id": gw.id,
+                        "received": s.get("received", 0),
+                        "avg_rssi": s.get("avg_rssi"),
+                        "x": gw.x,
+                        "y": gw.y,
+                    }
+                )
             return result
 
     def get_statistics(self):
@@ -436,14 +432,16 @@ class SimulationEngine:
             timeline = []
             for t in sorted(buckets):
                 r = buckets[t]["received"]
-                l = buckets[t]["lost"]
-                pdr = (r / (r + l)) if (r + l) > 0 else 1.0
-                timeline.append({
-                    "time": t,
-                    "received": r,
-                    "lost": l,
-                    "pdr": round(pdr, 4),
-                })
+                lost = buckets[t]["lost"]
+                pdr = (r / (r + lost)) if (r + lost) > 0 else 1.0
+                timeline.append(
+                    {
+                        "time": t,
+                        "received": r,
+                        "lost": lost,
+                        "pdr": round(pdr, 4),
+                    }
+                )
             return timeline
 
     def get_export(self):

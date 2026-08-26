@@ -5,6 +5,7 @@ backend.engine.SimulationEngine and adds a tiny `finished()` helper via a
 subclass so the benchmark orchestration code stays minimal. The frozen
 backend/ source is NOT modified.
 """
+
 import os
 import statistics
 import sys
@@ -29,12 +30,7 @@ class BenchmarkEngine(SimulationEngine):
         return self.state == "finished"
 
 
-def run_experiment(
-        node_count=50,
-        duration=100,
-        adr_enabled=True,
-        seed=42
-):
+def run_experiment(node_count=50, duration=100, adr_enabled=True, seed=42):
     """
     Common benchmark runner.
     """
@@ -42,10 +38,7 @@ def run_experiment(
     engine = BenchmarkEngine()
 
     engine.configure(
-        node_count=node_count,
-        duration=duration,
-        seed=seed,
-        adr_enabled=adr_enabled
+        node_count=node_count, duration=duration, seed=seed, adr_enabled=adr_enabled
     )
 
     engine.start()
@@ -78,13 +71,7 @@ def run_experiment(
         "nodes": node_count,
         "pdr": stats.get("pdr", 0),
         "throughput": stats.get("throughput", 0),
-        "avg_rssi":
-            statistics.mean(rssis)
-            if rssis else None,
-        "avg_sf":
-            statistics.mean(sfs)
-            if sfs else None,
-        "collision_rate":
-            failed / (success + failed)
-            if success + failed else 0
+        "avg_rssi": statistics.mean(rssis) if rssis else None,
+        "avg_sf": statistics.mean(sfs) if sfs else None,
+        "collision_rate": failed / (success + failed) if success + failed else 0,
     }

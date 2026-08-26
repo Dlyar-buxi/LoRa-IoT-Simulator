@@ -1,17 +1,31 @@
-name: Tests
+name: Tests & Quality
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
-    branches: [master, main]
+    branches: [main]
+
+# Cancel older runs on the same ref (keeps the queue short on stacked pushes)
+concurrency:
+  group: ci-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+
+  # --------------------------------------------------------------------
+  # JOB 1 — Lint & format gate (Ruff).
+  # --------------------------------------------------------------------
+  quality:
+    name: Ruff lint + format
     runs-on: ubuntu-latest
+    timeout-minutes: 6
 
     steps:
-      - name: Checkout
+      - name: Checkout sources
         uses: actions/checkout@v4
 
       - name: Set up Python 3.12
@@ -19,16 +33,135 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install dev tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Ruff check
+        run: python -m ruff check .
+
+      - name: Ruff format (--check)
+        run: python -m ruff format --check .
+
+
+  # --------------------------------------------------------------------
+  # JOB 2 — Pytest across Python 3.11 / 3.12 / 3.13 with coverage gate.
+  # --------------------------------------------------------------------
+  test:
+    name: Test multi-Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    needs: quality
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install -r requirements-dev.txt
 
-      # backend API + engine unit/integration tests (hermetic, no broker)
-      - name: Run backend tests
-        run: pytest backend/ -q
+      - name: Pytest with coverage (fail-under 60%)
+        env:
+          DB_ENABLED: "false"
+        run: |
+          python -m pytest --cov --cov-report=term --cov-report=xml:coverage.xml \
+                           --cov-fail-under=60 \
+                           backend/ simulator/ gateway/ -q
 
-      # simulator + gateway self-tests (standard library only)
-      - name: Run simulator & gateway self-tests
-        run: pytest simulator/ gateway/ -q
+      - name: Upload coverage artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+
+  # --------------------------------------------------------------------
+  # JOB 3 — Docker build + HEALTHCHECK probe.
+  # --------------------------------------------------------------------
+  docker:
+    name: Docker build + healthcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    needs: quality
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: lora-iot-simulator:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-run container + probe health
+        run: |
+          set -euo pipefail
+          docker run -d --rm --name lora-ci -p 127.0.0.1:18000:8000 \
+            -e DB_ENABLED=false \
+            lora-iot-simulator:ci
+          sleep 12
+          HEALTH=$(docker inspect -f '{{.State.Health.Status}}' lora-ci || echo "no-health")
+          echo "Container health: $HEALTH"
+          if [ "$HEALTH" != "healthy" ]; then
+            docker logs lora-ci || true
+            echo "::error::Container did not become healthy in 12 s"
+            exit 1
+          fi
+          HTTP=$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:18000/health || echo "000")
+          echo "HTTP /health: $HTTP"
+          if [ "$HTTP" != "200" ]; then
+            docker logs lora-ci || true
+            echo "::error::/health returned $HTTP, expected 200"
+            exit 1
+          fi
+          docker stop lora-ci >/dev/null || true
+
+
+  # --------------------------------------------------------------------
+  # JOB 4 — Dependency Review (PR-only).
+  # --------------------------------------------------------------------
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure

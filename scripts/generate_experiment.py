@@ -20,8 +20,8 @@ import sys
 # Make the project root importable when run as a bare script.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.engine import SimulationEngine  # noqa: E402
 from backend.database import ExperimentRecorder  # noqa: E402
+from backend.engine import SimulationEngine  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("generate_experiment")
@@ -92,28 +92,47 @@ def run(args):
     stats = engine.get_statistics()
     log.info(
         "Experiment done: nodes=%d area=%d seed=%d gw=%d adr=%s steps=%d pdr=%.3f",
-        engine.node_count, engine.area_size, engine.seed,
-        args.gateway_count, engine.adr_enabled, executed, stats["pdr"],
+        engine.node_count,
+        engine.area_size,
+        engine.seed,
+        args.gateway_count,
+        engine.adr_enabled,
+        executed,
+        stats["pdr"],
     )
-    print(json.dumps({
-        "executed": executed,
-        "pdr": round(stats["pdr"], 4),
-        "throughput": stats["throughput"],
-        "retransmissions": stats["retransmissions"],
-        "db": db_path,
-    }, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "executed": executed,
+                "pdr": round(stats["pdr"], 4),
+                "throughput": stats["throughput"],
+                "retransmissions": stats["retransmissions"],
+                "db": db_path,
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
 def main():
-    p = argparse.ArgumentParser(description="Generate a LoRa-IoT simulation run (headless).")
+    p = argparse.ArgumentParser(
+        description="Generate a LoRa-IoT simulation run (headless)."
+    )
     p.add_argument("--nodes", type=int, default=20, dest="node_count")
     p.add_argument("--area", type=float, default=2000.0, dest="area_size")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--duration", type=float, default=60.0)
-    p.add_argument("--gateways", type=int, default=2, choices=[1, 2, 3, 4], dest="gateway_count")
+    p.add_argument(
+        "--gateways", type=int, default=2, choices=[1, 2, 3, 4], dest="gateway_count"
+    )
     p.add_argument("--adr", action="store_true", default=False, dest="adr")
-    p.add_argument("--db", type=str, default=None, help="SQLite path (default: $DB_PATH or experiments.db)")
+    p.add_argument(
+        "--db",
+        type=str,
+        default=None,
+        help="SQLite path (default: $DB_PATH or experiments.db)",
+    )
     args = p.parse_args()
     sys.exit(run(args))
 

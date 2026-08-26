@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import socket
 from urllib.parse import urlparse
 
 try:
@@ -88,7 +87,7 @@ class MqttClient:
             self._client.connect_async(host, port, keepalive=keepalive)
             self._client.loop_start()
             return True
-        except (OSError, socket.error, ValueError) as e:
+        except (OSError, ValueError) as e:
             logger.warning(
                 "MQTT 连接失败（%s:%s）：%s — 遥测降级为静默丢弃", host, port, e
             )

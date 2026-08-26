@@ -1,4 +1,4 @@
-// LoRa Dashboard (Sprint 4.4.4) — 零依赖原生 JS + SVG
+// LoRa Dashboard (Sprint 4.4.4 + v1.2 hardening) — 零依赖原生 JS + SVG
 // 通过同源于后端挂载的 /api/* 拉取数据；无 CDN、可离线运行。
 "use strict";
 
@@ -6,28 +6,119 @@ const API = window.location.origin;
 const SVGNS = "http://www.w3.org/2000/svg";
 const GW_PALETTE = ["#2b6cb0", "#dd6b20", "#38a169", "#805ad5"];
 
-// 网关着色：按编号取调色板（支持最多 4 网关，Sprint 5.5 D6）
+// ========== v1.2 T12 API Key 管理 (localStorage, masked display, REST+WS 注入) ==========
+const LS_API_KEY = "lora_api_key";
+
+function _loadApiKey() {
+  try { return localStorage.getItem(LS_API_KEY) || ""; } catch (_) { return ""; }
+}
+function _saveApiKey(k) {
+  try { localStorage.setItem(LS_API_KEY, k || ""); } catch (_) {}
+}
+function _clearApiKey() {
+  try { localStorage.removeItem(LS_API_KEY); } catch (_) {}
+}
+function _maskKey(k) {
+  if (!k) return "";
+  if (k.length <= 4) return "••••";
+  return k.slice(0, 2) + "••••" + k.slice(-2);
+}
+
+// 取「实际原始」密钥 (REST header / WS ?token= 用)
+function getApiKeyRaw() { return _loadApiKey(); }
+
+// 顶部 auth-bar：label + password input + 保存 / 清除
+function mountAuthBar() {
+  const header = document.querySelector("header");
+  if (!header || document.getElementById("auth-bar")) return;
+  const bar = document.createElement("div");
+  bar.id = "auth-bar";
+  bar.className = "auth-bar";
+  bar.innerHTML =
+    '<span class="auth-label">API Key</span>' +
+    '<input id="auth-input" type="password" autocomplete="off" spellcheck="false" ' +
+      'placeholder="set API_KEY env to enable on server">' +
+    '<button id="auth-save" type="button">Save</button>' +
+    '<button id="auth-clear" type="button">Clear</button>' +
+    '<span id="auth-preview" class="auth-preview"></span>';
+  header.appendChild(bar);
+
+  const input = document.getElementById("auth-input");
+  const save = document.getElementById("auth-save");
+  const clear = document.getElementById("auth-clear");
+  const prev = document.getElementById("auth-preview");
+
+  // 初始化：如果已保存则显示 mask 预览，input placeholder 变 saved
+  const existing = _loadApiKey();
+  if (existing) prev.textContent = "Saved: " + _maskKey(existing);
+
+  save.onclick = () => {
+    const v = input.value.trim();
+    if (v) {
+      _saveApiKey(v);
+      prev.textContent = "Saved: " + _maskKey(v);
+      input.value = "";
+      showToast("API Key saved (browser local). WS will reconnect.", "success");
+      // WS 重连使用新 key
+      if (ws) { try { ws.close(); } catch (_) {} }
+    } else {
+      showToast("Key is empty; click Clear to remove.", "warning");
+    }
+  };
+  clear.onclick = () => {
+    _clearApiKey();
+    prev.textContent = "";
+    input.value = "";
+    showToast("API Key cleared from browser.", "info");
+  };
+}
+
+// ========== v1.2 T11 全局 Toast 组件 ==========
+function mountToastRoot() {
+  if (document.getElementById("toast-root")) return;
+  const r = document.createElement("div");
+  r.id = "toast-root";
+  r.className = "toast-root";
+  document.body.appendChild(r);
+}
+function showToast(msg, kind, ms) {
+  mountToastRoot();
+  kind = kind || "info";
+  ms = ms || (kind === "error" ? 6000 : 3200);
+  const root = document.getElementById("toast-root");
+  const t = document.createElement("div");
+  t.className = "toast toast-" + kind;
+  t.textContent = msg;
+  root.appendChild(t);
+  // 下一 tick 加 .in 触发 CSS transition (如果存在)
+  requestAnimationFrame(() => { t.classList.add("toast-in"); });
+  setTimeout(() => {
+    t.classList.remove("toast-in");
+    setTimeout(() => t.remove(), 280);
+  }, ms);
+}
+
+// ========== 网关着色 ==========
 function gwColor(id) {
   const m = /^GW0*(\d+)$/.exec(id || "");
   const idx = m ? (parseInt(m[1], 10) - 1) : -1;
   return (idx >= 0 && idx < GW_PALETTE.length) ? GW_PALETTE[idx] : "#9ca3af";
 }
 
-const TICK_MS = 900;        // 自动运行步进间隔（两次 tick 之间的「冷却时间」）
+const TICK_MS = 900;        // 自动运行步进间隔
 const STEP_PER_TICK = 5;    // 每次推进的事件数
 
-// P1-8: autoTimer 现在是 setTimeout id；autoRunning 标志位驱动链式循环。
-// 目的：原 setInterval(tick, 900) 在服务器慢时会把 Promise 堆叠起来——
-// 新策略「上一轮 tick+refresh 全部结束后再等待 900ms 才开始下一轮」，
-// 绝不同时飞行两个 refresh() Promise.all。
+// P1-8: 链式 setTimeout，不堆叠请求
 let autoTimer = null;
 let autoRunning = false;
 
-// ---------- WebSocket 实时通道（Sprint 5.1）----------
-// 初始：REST 首屏加载；运行：WebSocket 实时；异常：REST 轮询降级。
+// ========== v1.2 T11 WebSocket + 指数退避重连 (1s → 30s cap) ==========
 let wsOnline = false;
 let livePackets = [];
 let ws = null;
+let wsBackoffMs = 1000;      // 起始 1s
+const WS_BACKOFF_MAX = 30000;// 封顶 30s
+let wsReconnectTimer = null; // 便于后续可 cancel
 
 function handleTelemetry(rec) {
   livePackets.push(rec);
@@ -49,40 +140,91 @@ function setWsBadge(text, cls) {
 }
 
 function connectWs() {
+  // 清任何未完成的重连计划
+  if (wsReconnectTimer != null) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
   const proto = location.protocol === "https:" ? "wss://" : "ws://";
+  const key = getApiKeyRaw();
+  const qs = key ? ("?token=" + encodeURIComponent(key)) : "";
+  let sock;
   try {
-    ws = new WebSocket(proto + location.host + "/ws");
+    sock = new WebSocket(proto + location.host + "/ws" + qs);
   } catch (e) {
     wsOnline = false;
     setWsBadge("WS 离线", "state-finished");
+    _scheduleWsReconnect();
     return;
   }
-  ws.onopen = () => { wsOnline = true; setWsBadge("WS 在线", "state-running"); };
-  ws.onmessage = (e) => { try { handleTelemetry(JSON.parse(e.data)); } catch (_) {} };
-  ws.onclose = () => { wsOnline = false; setWsBadge("WS 离线", "state-finished"); };
-  ws.onerror = () => { wsOnline = false; setWsBadge("WS 离线", "state-finished"); };
+  ws = sock;
+  setWsBadge("WS 连接中…", "state-paused");
+
+  sock.onopen = () => {
+    wsOnline = true;
+    wsBackoffMs = 1000;                 // 成功立刻重置退避
+    setWsBadge("WS 在线", "state-running");
+  };
+  sock.onmessage = (e) => {
+    try { handleTelemetry(JSON.parse(e.data)); } catch (_) {}
+  };
+  sock.onerror = () => {
+    wsOnline = false;
+    setWsBadge("WS 离线", "state-finished");
+  };
+  sock.onclose = () => {
+    wsOnline = false;
+    setWsBadge("WS 离线", "state-finished");
+    _scheduleWsReconnect();
+  };
 }
 
-// ---------- 工具 ----------
+function _scheduleWsReconnect() {
+  if (wsReconnectTimer != null) return;
+  const next = wsBackoffMs;
+  wsBackoffMs = Math.min(WS_BACKOFF_MAX, Math.floor(wsBackoffMs * 2)); // 指数 ×2
+  // 30s 到达顶之后，用户会感知 "30s 自动重试"
+  setWsBadge("WS 重试 " + (next / 1000).toFixed(0) + "s", "state-finished");
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    connectWs();
+  }, next);
+}
+
+// ========== 工具 + API Key 注入 ==========
 function $(id) { return document.getElementById(id); }
 
+function _authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  const k = getApiKeyRaw();
+  if (k) h["X-API-Key"] = k;
+  return h;
+}
+
 async function apiGet(path) {
-  const r = await fetch(API + path, { cache: "no-store" });
+  const r = await fetch(API + path, {
+    cache: "no-store",
+    headers: _authHeaders(),
+  });
+  if (r.status === 401) showToast("Unauthorized — save a valid API Key (top-right).", "warning", 6000);
   if (!r.ok) throw new Error(path + " HTTP " + r.status);
   return r.json();
 }
 async function apiPost(path) {
-  const r = await fetch(API + path, { method: "POST", cache: "no-store" });
+  const r = await fetch(API + path, {
+    method: "POST",
+    cache: "no-store",
+    headers: _authHeaders(),
+  });
+  if (r.status === 401) showToast("Unauthorized — save a valid API Key (top-right).", "warning", 6000);
   if (!r.ok) throw new Error(path + " HTTP " + r.status);
   return r.json();
 }
 async function apiPostJson(path, body) {
   const r = await fetch(API + path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: _authHeaders({ "Content-Type": "application/json" }),
     cache: "no-store",
     body: JSON.stringify(body),
   });
+  if (r.status === 401) showToast("Unauthorized — save a valid API Key (top-right).", "warning", 6000);
   if (!r.ok) {
     let detail = "HTTP " + r.status;
     try {
@@ -99,7 +241,7 @@ function svgEl(tag, attrs) {
   return e;
 }
 
-// ---------- 刷新与渲染 ----------
+// ========== 刷新与渲染 ==========
 async function refresh() {
   try {
     const calls = [
@@ -109,7 +251,6 @@ async function refresh() {
       apiGet("/api/gateways"),
       apiGet("/api/history"),
     ];
-    // WS 在线时，packet 表由实时通道驱动；离线时回退 REST 拉取
     if (!wsOnline) calls.push(apiGet("/api/packets?limit=30"));
     const results = await Promise.all(calls);
     const [status, stats, nodes, gateways, history] = results;
@@ -231,8 +372,7 @@ function renderPackets(packets) {
   }
 }
 
-// ---------- 实验配置面板（Sprint 5.5）----------
-// 网关坐标由前端按网格规则自动布点，用户只填数量（1–4）
+// ========== 实验配置面板 ==========
 function gwPositions(count, area) {
   const margin = area * 0.15;
   const usable = area - 2 * margin;
@@ -256,7 +396,6 @@ function setCfgMsg(text, kind) {
   m.className = "cfg-msg" + (kind ? " " + kind : "");
 }
 
-// 页面加载时预填当前生效配置（D4）
 async function fetchCurrentConfig() {
   try {
     const cfg = await apiGet("/api/simulation/config");
@@ -271,9 +410,10 @@ async function fetchCurrentConfig() {
   }
 }
 
-// 提交配置：停 auto-run → POST → 刷新 → 提示（D3/D5）
+// ========== v1.2 T12 applyConfig：disabled + loading + 10s 强制恢复 ==========
 function applyConfig() {
   setCfgMsg("", "");
+  const btn = $("btn-apply");
   let payload;
   try {
     const node_count = parseInt($("cfg-node_count").value, 10);
@@ -291,22 +431,56 @@ function applyConfig() {
     };
   } catch (e) {
     setCfgMsg("Invalid input: " + e.message, "error");
+    showToast("Invalid input: " + e.message, "error");
     return;
   }
-  // 停止自动运行，避免 Apply 后立即推进导致实验边界混乱（D3）
-  // 用 setAuto(false) 统一清理：既清 setTimeout 也重置 autoRunning 标志位
+
+  // 停 auto-run
   if (autoRunning || autoTimer != null) {
     setAuto(false);
     const chk = $("chk-auto");
     if (chk) chk.checked = false;
   }
+
+  // 进入 loading 态
+  let recovered = false;
+  const originalLabel = btn ? (btn.textContent || "Apply") : "Apply";
+  const restore = (why) => {
+    if (recovered) return;
+    recovered = true;
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove("btn-loading");
+      btn.textContent = originalLabel;
+    }
+  };
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add("btn-loading");
+    btn.textContent = "Applying…";
+  }
+  // 10 s 强制恢复安全阀 (TR: Apply 按钮 10s 内从 loading 态恢复)
+  const safetyTimer = setTimeout(() => {
+    if (!recovered) {
+      restore("timeout");
+      setCfgMsg("Apply timed out (>10s). Check network / API key.", "error");
+      showToast("Apply timed out (>10s).", "error");
+    }
+  }, 10000);
+
   apiPostJson("/api/simulation/config", payload)
     .then(() => {
       setCfgMsg("Configuration applied. Press Start to run.", "ok");
-      refresh();
+      showToast("Configuration applied. Press Start.", "success");
+      restore("ok");
+      clearTimeout(safetyTimer);
+      return refresh();
     })
     .catch((e) => {
       setCfgMsg("Apply failed: " + e.message, "error");
+      showToast("Apply failed: " + e.message, "error");
+      restore("err");
+      clearTimeout(safetyTimer);
     });
 }
 
@@ -316,26 +490,18 @@ function bindConfigPanel() {
   fetchCurrentConfig();
 }
 
-// ---------- 控制 ----------
-// 同步 tick：返回一个 Promise，便于链式 setAuto 知道本轮何时结束
+// ========== 控制 ==========
 function tick() {
   return apiPost("/api/simulation/step?steps=" + STEP_PER_TICK)
     .then(refresh)
     .catch(e => { console.error("tick error:", e); });
 }
 
-// P1-8: 链式 setTimeout，不堆叠请求。
-//   执行路径：tick() + refresh() 全部 await 完成 → 等待 TICK_MS → 下一轮
-//   如果用户中途 setAuto(false)：autoRunning=false，下一次循环入口直接返回
+// P1-8: 链式 setTimeout，不堆叠请求
 async function autoTickLoop() {
   if (!autoRunning) return;
-  try {
-    await tick();
-  } catch (_) { /* tick 内部已吞掉异常并打印 */ }
-  // tick 完全结束后再等 TICK_MS（而非 setInterval 的「每 900ms 不管你完没完」）
-  if (autoRunning) {
-    autoTimer = setTimeout(autoTickLoop, TICK_MS);
-  }
+  try { await tick(); } catch (_) {}
+  if (autoRunning) autoTimer = setTimeout(autoTickLoop, TICK_MS);
 }
 
 function setAuto(on) {
@@ -343,7 +509,6 @@ function setAuto(on) {
     if (autoRunning) return;
     autoRunning = true;
     apiPost("/api/simulation/start").catch(() => {});
-    // 第一次立刻触发（对应用户体感：勾选后马上开始跑）
     autoTimer = setTimeout(autoTickLoop, 0);
   } else {
     autoRunning = false;
@@ -355,18 +520,20 @@ function setAuto(on) {
 }
 
 function bindControls() {
-  $("btn-start").onclick = () => apiPost("/api/simulation/start").then(refresh);
-  $("btn-pause").onclick = () => apiPost("/api/simulation/pause").then(refresh);
-  $("btn-step").onclick = () => apiPost("/api/simulation/step?steps=1").then(refresh);
-  $("btn-reset").onclick = () => apiPost("/api/simulation/reset").then(refresh);
+  $("btn-start").onclick = () => apiPost("/api/simulation/start").then(refresh).catch(e => showToast("Start failed: " + e.message, "error"));
+  $("btn-pause").onclick = () => apiPost("/api/simulation/pause").then(refresh).catch(e => showToast("Pause failed: " + e.message, "error"));
+  $("btn-step").onclick = () => apiPost("/api/simulation/step?steps=1").then(refresh).catch(e => showToast("Step failed: " + e.message, "error"));
+  $("btn-reset").onclick = () => apiPost("/api/simulation/reset").then(refresh).catch(e => showToast("Reset failed: " + e.message, "error"));
   $("chk-auto").onchange = (e) => setAuto(e.target.checked);
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  mountToastRoot();           // T11 toast
+  mountAuthBar();             // T12 API Key UI
   bindControls();
   bindConfigPanel();
   refresh();
-  setInterval(refresh, 1500);  // 基础轮询，保证手动操作后 KPI 即时刷新
+  setInterval(refresh, 1500); // 基础轮询
   if ($("chk-auto").checked) setAuto(true);
-  connectWs();  // 实时通道：连上后 packet 表转由 /ws 驱动
+  connectWs();                // 实时通道（含指数退避重连）
 });

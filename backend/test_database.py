@@ -41,9 +41,14 @@ def test_create_and_query():
     r, tmp = _new_recorder()
     try:
         eid = r.begin_experiment(
-            {"seed": 42, "node_count": 200, "duration": 60.0,
-             "area_size": 2000, "adr_enabled": True,
-             "gateway_cfg": [("GW001", 500, 500), ("GW002", 1500, 1500)]}
+            {
+                "seed": 42,
+                "node_count": 200,
+                "duration": 60.0,
+                "area_size": 2000,
+                "adr_enabled": True,
+                "gateway_cfg": [("GW001", 500, 500), ("GW002", 1500, 1500)],
+            }
         )
         assert eid is not None, "begin_experiment 返回 None"
         for rec in _sample_events(3):
@@ -61,7 +66,11 @@ def test_create_and_query():
 
         det = r.get_experiment(eid)
         assert det is not None
-        assert det["statistics"] == {"throughput": 3.33, "pdr": 1.0, "retransmissions": 1}
+        assert det["statistics"] == {
+            "throughput": 3.33,
+            "pdr": 1.0,
+            "retransmissions": 1,
+        }
         assert det["finalized"] is True
         assert len(det["nodes"]) == 1
         assert det["gateway_cfg"] == [["GW001", 500, 500], ["GW002", 1500, 1500]]
@@ -85,10 +94,14 @@ def test_reset_new_experiment():
     r, tmp = _new_recorder()
     try:
         e1 = r.begin_experiment({"seed": 1})
-        r.record_event({"time": 0.0, "event": "TRANSMIT", "node": "A", "sf": 7, "success": True})
+        r.record_event(
+            {"time": 0.0, "event": "TRANSMIT", "node": "A", "sf": 7, "success": True}
+        )
         e2 = r.begin_experiment({"seed": 1})  # 模拟 reset：先收旧再开新
         assert e2 != e1, "reset 未创建新实验"
-        r.record_event({"time": 0.0, "event": "TRANSMIT", "node": "B", "sf": 7, "success": True})
+        r.record_event(
+            {"time": 0.0, "event": "TRANSMIT", "node": "B", "sf": 7, "success": True}
+        )
         r.finalize_experiment()
 
         evs1 = r.get_experiment_events(e1)

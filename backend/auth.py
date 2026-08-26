@@ -26,7 +26,6 @@ from __future__ import annotations
 import os
 import secrets
 import urllib.parse as _up
-from typing import Optional
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
@@ -37,9 +36,8 @@ from starlette.middleware.base import (
 from starlette.responses import Response as StarletteResponse
 from starlette.types import Scope
 
-
 # 启动期读一次 env，运行期不重读
-_API_KEY: Optional[str] = None
+_API_KEY: str | None = None
 _raw = os.getenv("API_KEY")
 if _raw:
     stripped = _raw.strip()
@@ -54,9 +52,7 @@ def api_key_required() -> bool:
 
 def _is_static_or_health(path: str) -> bool:
     """/api/* 之外的所有 HTTP 路径永远放行（StaticFiles、health 等）。"""
-    if path == "/api" or path.startswith("/api/"):
-        return False
-    return True
+    return not (path == "/api" or path.startswith("/api/"))
 
 
 def _unauth_401(detail: str) -> JSONResponse:
@@ -67,14 +63,14 @@ def _unauth_401(detail: str) -> JSONResponse:
     )
 
 
-def _lookup_qs_token(query_string: bytes) -> Optional[str]:
+def _lookup_qs_token(query_string: bytes) -> str | None:
     if not query_string:
         return None
     for part in query_string.split(b"&"):
         if not part:
             continue
         if part.startswith(b"token="):
-            raw = part[len(b"token="):]
+            raw = part[len(b"token=") :]
             try:
                 return _up.unquote_plus(raw.decode("utf-8"))
             except Exception:  # noqa: BLE001
@@ -111,7 +107,7 @@ class _WsUnauthorized(Exception):
     """信号异常：WS token 校验失败，由调用方转成 401 关闭帧/HTTP 响应。"""
 
 
-def enforce_ws_token(scope: Scope) -> Optional[JSONResponse]:
+def enforce_ws_token(scope: Scope) -> JSONResponse | None:
     """对 /ws 的 scope 做 token 校验。
 
     返回值：

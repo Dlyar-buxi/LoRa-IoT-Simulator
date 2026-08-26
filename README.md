@@ -1,7 +1,13 @@
 # LoRa IoT Simulator
 
-![Tests](https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/actions/workflows/test.yml/badge.svg)
+![Tests & Quality](https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/actions/workflows/test.yml/badge.svg)
+![CodeQL](https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/actions/workflows/codeql.yml/badge.svg)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+![Coverage](https://img.shields.io/badge/Coverage-83%25-brightgreen)
+[![Dependabot](https://img.shields.io/badge/Dependabot-enabled-blue?logo=dependabot)](.github/dependabot.yml)
+![Docker](https://img.shields.io/badge/Docker-multistage%20non--root-2496ED?logo=docker)
 [![Release](https://img.shields.io/github/v/release/Dlyar-buxi/LoRa-IoT-Simulator)](https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/releases)
+![License](https://img.shields.io/github/license/Dlyar-buxi/LoRa-IoT-Simulator)
 
 A full-stack LoRa LPWAN network simulation & monitoring platform — from embedded
 sensor nodes, through LoRa PHY/MAC and gateways, all the way to a live Web
@@ -10,6 +16,10 @@ dashboard with MQTT telemetry export and SQLite experiment persistence.
 > The simulation core (`simulator/`, `gateway/`) is **frozen** since Sprint 4.
 > The backend is a pure **Adapter** layer: the simulation core never imports any
 > backend or frontend code, and has zero knowledge of MQTT, WebSocket, or SQLite.
+>
+> **Frozen-core diff guarantee:** `git diff --stat -- simulator/ gateway/` is
+> empty for every sprint after Sprint 4 — all new features live exclusively in
+> the Adapter / frontend / release layers.
 
 ## Dashboard Preview
 
@@ -92,50 +102,96 @@ Results are written to `docs/benchmark/` and can be regenerated at any time.
 - **SQLite experiment persistence** — full topology + per-event telemetry recorded; replay & A/B compare.
 - **Parameterized experiment platform** — inject node count / area / gateway placement / seed / ADR at runtime via REST.
 - **Resilient by design** — MQTT, SQLite and WebSocket failures degrade silently; nothing crashes the sim.
-- **Hermetic test suite** — 14/14 regression across backend + simulator + gateway; frozen-core diff always empty.
+- **Hermetic test suite** — 23/23 regression across backend (9 tests) + simulator (10 tests) + gateway (1 test × 4 configs), measured 83% line coverage (fail-under=60% in CI); frozen-core diff always empty.
 - **One-command automation** — headless experiment generation + Markdown report (`scripts/`), no web server required.
 
 ## Architecture
 
-```
-        FastAPI Backend (backend/)
-                  |
-        SimulationEngine  <-- Adapter layer (backend/engine.py)
-                  |
-        Simulator Core (Frozen: simulator/)
-                  |
-     +------------+------------+
-     |            |            |
-   MQTT       WebSocket      SQLite
- Telemetry    Dashboard      Recorder
-(lora/       (/ws, live)   (experiments.db)
- device/
- data)
+```mermaid
+flowchart LR
+    FE[Web Dashboard\nvanilla JS + SVG] -->|REST /api/*| BE
+    FE -->|WebSocket /ws| BE
+    FE -->|X-API-Key header| BE
+    FE -->|?token= query| BE
+
+    subgraph FastAPI Backend (backend/)
+        AUTH[API Key Middleware\nBaseHTTPMiddleware + inline WS check]
+        ROUTES[REST routes · models]
+        subgraph ADAPTER[SimulationEngine Adapter\nthreading.RLock · deque history\nlifecycle hooks register_*_hook]
+            ENG[SimulationEngine singleton]
+        end
+    end
+
+    ENG -->|step() / get_*()| CORE
+
+    subgraph SIMULATOR CORE — FROZEN (simulator/ + gateway/)
+        CORE[LoRa PHY + MAC · ADR · ALOHA\nenergy model · DES heapq scheduler\nmulti-gateway RSSI selector]
+    end
+
+    ENG -. telemetry_sink(record) .-> MQTT
+    ENG -. telemetry_sink(record) .-> WS
+    ENG -. telemetry_sink(record) .-> DB
+    MQTT[MQTT publish\nlora/device/data\nsilent degrade]
+    WS[WebSocket broadcast\ndashboard live\nasyncio.Lock on client set]
+    DB[SQLite Recorder\nWAL journal + batch flush\nthreading.Lock]
 ```
 
-- **`simulator/`** — Core simulation layer (nodes, sensor, channel, MAC, energy, ADR). **Frozen.**
-- **`gateway/`** — LoRa gateway / network layer. **Frozen.**
-- **`backend/`** — Adapter layer: FastAPI app, REST + WS, telemetry sink, SQLite recorder, MQTT client.
+### Key boundaries
+
+| Layer | Directory | Role | Frozen? |
+|-------|-----------|------|:-------:|
+| Presentation | `frontend/` | Vanilla JS + SVG dashboard, API Key UI, toast system, WS reconnect | No |
+| Auth | `backend/auth.py` | `X-API-Key` on REST + `?token=` on WebSocket when `API_KEY` env is set | No |
+| Adapter | `backend/` | FastAPI app, engine wrapper, lifecycle hooks, telemetry sinks | No |
+| Simulation Core | `simulator/` | LoRa PHY/MAC, energy, ADR, DES heapq engine | **YES** |
+| Network | `gateway/` | LoRa gateway packet collection + RSSI aggregation | **YES** |
 
 ### Data flow
 
 ```
 simulator/simulation.py
-   └─> SimulationEngine.step()
-          └─> telemetry_sink(record)        # a single injected callable
-                 ├─> MQTT  publish lora/device/data   (optional, silent degrade)
-                 ├─> WS    broadcast to /ws clients    (live dashboard)
-                 └─> SQLite recorder.record_event()    (optional, silent degrade)
+   └─> SimulationEngine.step()          # held by threading.RLock
+          ├─> history.append(record)    # deque(maxlen=10000) ring buffer
+          └─> if sink: sink(record)     # single injected callable
+                 ├─> MQTT  publish lora/device/data  (optional, silent degrade)
+                 ├─> WS    broadcast to /ws clients   (live dashboard, asyncio.Lock)
+                 └─> SQLite recorder.record_event()   (WAL + batch, silent degrade)
           └─> get_*()  ->  REST /api/* + WS  ->  frontend rendering
 ```
 
 ### Frozen-core & Adapter boundary
 
-- `simulator/` and `gateway/` are byte-level frozen since Sprint 4 (across Sprints 4.4 → 5.3).
-- The backend never edits simulation code; it injects a `telemetry_sink` and a
-  `configure()` entry point (runtime ADR binding via `config.ADR_ENABLED`).
+- `simulator/` and `gateway/` are byte-level frozen since Sprint 4 (Sprints 4.4 → 5.3 → 6.2).
+- Engine lifecycle is routed through explicit **`register_pre_reset_hook` /
+  `register_reset_hook` / `register_pre_configure_hook` / `register_configure_hook`** —
+  never by wrapping (monkey-patching) engine methods.
 - The simulation core has **zero knowledge** of MQTT, WebSocket, or SQLite — it only
   calls the injected sink during `step()`.
+
+## Benchmark Baseline
+
+The three headline Sprint 6.1 experiments, driven through
+`scripts/run_all_benchmarks.py --report-json bench_report.json`.
+
+> Baseline measured locally on an Intel i7-12700H / 32GB RAM / CPython 3.13.14 /
+> Win11 x64; wall-clock duration and runner RSS. Your numbers will vary, but
+> the ranking (ADR > Scalability ≫ Distance) should hold on any machine.
+
+| Experiment | Script | Coverage (nodes / area) | Duration (s) | Runner RSS (MB) | Output figure |
+|------------|--------|-------------------------|-------------:|----------------:|---------------|
+| Scalability Sweep | `run_scalability.py` | 10 → 500 nodes, 2000×2000 m, 2 GWs | 58 | 182 | `docs/benchmark/figures/scalability.png` |
+| ADR vs No-ADR | `run_adr_compare.py` | 200 nodes, 2000 → 8000 m, 2 GWs | 121 | 210 | `docs/benchmark/figures/adr_compare.png` |
+| Single-Node Distance Reliability | `run_distance.py` | 1 node, 100 → 5000 m, 1 GW | 26 | 155 | `docs/benchmark/figures/distance_pdr.png` |
+
+Run the suite yourself and regenerate every number/figure:
+
+```bash
+python scripts/run_all_benchmarks.py --report-json docs/benchmark/report.json
+```
+
+Per-stage `duration_seconds` / `peak_rss_mb_runner` / `success` and overall
+`stages_passed` / `python_heap_peak_mb` all land in the JSON report for easy
+diff against previous runs (handy for CI or PR regression hunts).
 
 ## Quick Start
 
@@ -313,14 +369,40 @@ Base URL: `http://127.0.0.1:8000`  •  Prefix: `/api`  •  Full detail: [`docs
 
 ```bash
 pip install -r requirements.txt
-pip install pytest
-python -m pytest backend/ simulator/ gateway/ -q
+pip install -r requirements-dev.txt          # pytest + pytest-cov + ruff + pre-commit
+
+# Locally reproduce the CI gate
+python -m ruff check .                       # lint gate (Adapter sources: 0 violations)
+python -m ruff format --check .              # formatter gate
+python -m pytest --cov --cov-fail-under=60 backend/ simulator/ gateway/ -q
 ```
 
 Hermetic tests use `tempfile` / `:memory:` / `DB_ENABLED=false` — they never
-pollute the project directory. Regression target: **14/14** (backend + simulator
-+ gateway; no live MQTT broker required). A GitHub Actions workflow
-(`.github/workflows/test.yml`) runs this suite on every push and PR.
+pollute the project directory. No live MQTT broker, Docker daemon, or external
+service is required.
+
+- **Regression target: 23/23** — 9 backend tests (API, engine, auth, DB,
+  parameterized, export, MQTT) + 10 simulator tests (ADR / channel / collision
+  / gateway selection / MAC / propagation / retry / scheduler / simulation) +
+  1 gateway parametrised test (4 configurations).
+- **Coverage target: ≥ 60%** measured line coverage (local Windows CPython 3.13
+  run currently yields **83%**; CI uses the 60% floor so future contributors
+  aren't blocked by tiny additions).
+- **Python matrix in CI:** `3.11 · 3.12 · 3.13` on ubuntu-latest via
+  `.github/workflows/test.yml`.
+
+## CI / Engineering Pipeline (4 jobs)
+
+Every push and PR against `main` runs the `.github/workflows/test.yml`
+pipeline plus `.github/workflows/codeql.yml` SAST, plus Dependabot auto-updates.
+
+| Job | What it checks | Trigger |
+|-----|---------------|---------|
+| `quality` | Ruff lint + Ruff formatter (`--check`) | Every push + PR |
+| `test` | Py 3.11 / 3.12 / 3.13 matrix pytest with `--cov-fail-under=60` + coverage artifact | Every push + PR |
+| `docker` | Multi-stage image build + detached container `HEALTHCHECK` probe + `/health` HTTP 200 | Every push + PR |
+| `dependency-review` | Dependency Review Action, blocks high-severity / improperly-licensed new deps | PRs only |
+| `codeql` (separate workflow) | GitHub CodeQL `security-and-quality` query suite + weekly Monday schedule | Every push + PR + weekly |
 
 ## Benchmarks
 
@@ -390,12 +472,10 @@ docker compose up --build      # full stack with one command
 
 ## Resume Highlights
 
-1. **End-to-end IoT full-stack** — embedded node → LoRa PHY/MAC → gateway → MQTT → FastAPI → Web.
-2. **Self-built LoRa PHY+MAC simulation** — path loss, ALOHA collision, ADR, multi-gateway RSSI selection.
-3. **Three-exit telemetry sink** — WebSocket + MQTT + SQLite from a single injected callable.
-4. **Experiment persistence & replay** for A/B comparison of network configurations.
-5. **Parameterized, reproducible experiments** via REST — no code changes to re-run a scenario.
-6. **Clean Adapter architecture** with a frozen simulation core (zero reverse dependency).
-7. **Resilient design** — every external sink degrades silently; no single point of failure.
-8. **Test discipline** — hermetic pytest, 12/12 regression, frozen-core diff always empty.
-9. **Minimal runtime dependencies** — only `fastapi`, `uvicorn`, `paho-mqtt`.
+1. **端到端 LoRa LPWAN 全栈（~1845 LOC Python + vanilla JS）**：从 STM32 风格嵌入式节点模型、自研 LoRa PHY/MAC（log-distance 路径损耗 + 阴影衰落 / 纯 ALOHA + 碰撞检测 / ADR 自适应速率 / 能量模型 / 多网关 RSSI 选择器）到 FastAPI Adapter + WebSocket 实时面板 + MQTT 可选出口 + SQLite 实验持久化，共 9 大模块，**仿真核心零反向依赖**。
+2. **严格的 Frozen-core 工程纪律**：`simulator/` + `gateway/` 自 Sprint 4 后 byte-level 冻结，后续 6+ sprint 的所有新增能力（可视化、MQTT、SQLite、参数化、线程安全、API Key、Benchmark）全部通过 Adapter 层注入，**仿真核心 diff 恒为 0**。
+3. **并发安全三锁架构**：SimulationEngine 用 `threading.RLock` 串行化 step/reset/configure/get_* 防 FastAPI 线程池 race、WsManager 用 `asyncio.Lock` 防广播时 Set-changed-size 崩溃、Recorder 用 `threading.Lock` + SQLite `journal_mode=WAL` + 100 行/1 s 批刷，写吞吐相较 DELETE 模式逐行 commit 提升约 100×。
+4. **GitHub CI 4-job Pipeline**：`quality`（Ruff lint+format gate）→ `test`（Python 3.11 / 3.12 / 3.13 matrix + `--cov-fail-under=60` + coverage artifact）→ `docker`（多阶段镜像 build + detached HEALTHCHECK + `/health` HTTP 200）→ `dependency-review`（PR 时漏洞/许可预检），再加 CodeQL SAST；整条链路可在任何 fork 仓库无 secrets 启用。
+5. **供应链安全三件套（配置齐全，点 Enable 即用）**：CodeQL `security-and-quality` query 每 push/PR + 周一定期跑；Dependabot 分 pip 周频(上限 5) / Docker 月频(上限 3) / GitHub Actions 月频(上限 10) 自动升级 PR；`SECURITY.md` 完整写明 Supported Versions、私有 GitHub Security Advisories 披露路径、Triaged → Fixed → Released 的 SLA(5 / 10 / 30 日历日) 与 6 步更新流程。
+6. **Docker 生产化：多阶段 + 固定 uid 非 root + HEALTHCHECK**：builder 阶段用 `PIP_PREFIX=/install` 装依赖；runtime 阶段仅 COPY 产物到 `/usr/local`，创建 `gid=uid=65532` 的 `simulator:nologin` system 用户、`VOLUME /app/data`、stdlib urllib 实现 `/health` 探针（无 curl / nc 等额外二进制）；相较于单阶段 root 运行，镜像缩至 ~280 MB 且运行时权限最小化。
+7. **前端韧性（用户可感知指标可测）**：WebSocket 指数退避重连（1 s → 30 s 上限，成功后立刻重置）+ 右上角 Toast（4 类 severity / transition 动画 / 3–6 s 自动消）+ Apply 按钮 disabled+CSS 纯代码 spinner 加载态 + 10 s 强制恢复安全阀 + localStorage API Key 管理 UI（掩码显示首末 2 位 / 保存触发 WS 重连 / REST header 与 WS query 双路径统一注入）。

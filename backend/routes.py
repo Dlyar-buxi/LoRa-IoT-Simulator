@@ -11,7 +11,6 @@ from .engine import engine
 from .models import (
     ExperimentConfigIn,
     ExperimentConfigOut,
-    ExperimentEventOut,
     ExperimentOut,
     GatewayOut,
     NodeOut,

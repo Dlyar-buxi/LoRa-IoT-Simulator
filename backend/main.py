@@ -26,12 +26,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
+# P1-6: 可选 API Key 认证（env 未设置时零开销，TestClient 兼容）
+from .auth import enforce_ws_token, register_auth
+from .database import recorder
 from .engine import engine
 from .mqtt_client import mqtt
-from .database import recorder
 from .routes import router
-# P1-6: 可选 API Key 认证（env 未设置时零开销，TestClient 兼容）
-from .auth import register_auth, enforce_ws_token
 
 logging.basicConfig(level=logging.INFO)
 
@@ -39,6 +39,7 @@ logging.basicConfig(level=logging.INFO)
 FRONTEND_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "frontend")
 )
+
 
 # ---------- 进程内 WebSocket 管理器 ----------
 class WsManager:

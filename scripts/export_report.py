@@ -56,13 +56,15 @@ def run(args):
     lines.append(f"- **PDR (Packet Delivery Ratio):** {fmt_pct(stats.get('pdr'))}")
     lines.append(f"- **Throughput:** {stats.get('throughput')}")
     lines.append(f"- **Retransmissions:** {stats.get('retransmissions')}")
-    lines.append(f"- **Packet Loss Rate (1 - PDR):** {fmt_pct(1 - stats.get('pdr', 0))}")
+    lines.append(
+        f"- **Packet Loss Rate (1 - PDR):** {fmt_pct(1 - stats.get('pdr', 0))}"
+    )
     lines.append("")
     lines.append("## Gateways")
     lines.append("")
     lines.append("| Gateway | Received | Avg RSSI | X | Y |")
     lines.append("| --- | --- | --- | --- | --- |")
-    for g in (exp.get("gateways") or []):
+    for g in exp.get("gateways") or []:
         avg = g.get("avg_rssi")
         lines.append(
             f"| {g.get('id')} | {g.get('received')} | "
@@ -97,9 +99,18 @@ def run(args):
 
 def main():
     p = argparse.ArgumentParser(description="Export an experiment to Markdown.")
-    p.add_argument("--db", type=str, default=None, help="SQLite path (default: $DB_PATH or experiments.db)")
-    p.add_argument("--id", type=int, default=None, help="Experiment id (default: latest)")
-    p.add_argument("--out", type=str, default=None, help="Output .md path (default: stdout)")
+    p.add_argument(
+        "--db",
+        type=str,
+        default=None,
+        help="SQLite path (default: $DB_PATH or experiments.db)",
+    )
+    p.add_argument(
+        "--id", type=int, default=None, help="Experiment id (default: latest)"
+    )
+    p.add_argument(
+        "--out", type=str, default=None, help="Output .md path (default: stdout)"
+    )
     p.add_argument("--top", type=int, default=20, help="Max nodes to list")
     args = p.parse_args()
     sys.exit(run(args))

@@ -29,6 +29,7 @@
 - 查询：list_experiments / get_experiment / get_experiment_events
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -83,7 +84,10 @@ class ExperimentRecorder:
         # env 覆盖：DB_ENABLED 默认 true；DB_PATH 默认 experiments.db（项目根）
         if enabled is None:
             enabled = os.getenv("DB_ENABLED", "true").lower() in (
-                "1", "true", "yes", "on",
+                "1",
+                "true",
+                "yes",
+                "on",
             )
         if db_path is None:
             db_path = os.getenv("DB_PATH", "experiments.db")
@@ -101,7 +105,7 @@ class ExperimentRecorder:
         self._batch_count = _BATCH_COUNT
         self._batch_seconds = _BATCH_SECONDS
         self._pending_events = []  # list[tuple]：executemany 的参数队列
-        self._last_flush = 0.0     # monotonic time 秒，用于时间阈值判定
+        self._last_flush = 0.0  # monotonic time 秒，用于时间阈值判定
 
     # ---------- 连接 / 降级 ----------
 
@@ -115,7 +119,8 @@ class ExperimentRecorder:
             return False
         try:
             self._conn = sqlite3.connect(
-                self.db_path, check_same_thread=False,
+                self.db_path,
+                check_same_thread=False,
             )
             self._conn.row_factory = sqlite3.Row
             # P0-3: 开启 WAL（失败仅记日志，不影响功能，退回 DELETE 模式）
@@ -167,8 +172,11 @@ class ExperimentRecorder:
             self._last_flush = _time_mod.monotonic()
             return True
         except Exception as e:  # noqa: BLE001
-            logger.warning("flush 失败，丢弃 %d 条 pending events：%s",
-                           len(self._pending_events), e)
+            logger.warning(
+                "flush 失败，丢弃 %d 条 pending events：%s",
+                len(self._pending_events),
+                e,
+            )
             # 出错就清队列，避免下次再次爆炸
             self._pending_events.clear()
             self._last_flush = _time_mod.monotonic()
@@ -178,14 +186,10 @@ class ExperimentRecorder:
         with self._lock:
             # P0-3: 关库前强制 flush pending events，避免丢失尾部数据
             if self._conn is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self.flush()
-                except Exception:  # noqa: BLE001
-                    pass
-                try:
+                with contextlib.suppress(Exception):
                     self._conn.close()
-                except Exception:  # noqa: BLE001
-                    pass
                 self._conn = None
 
     def ensure_schema(self):
@@ -300,23 +304,24 @@ class ExperimentRecorder:
         if not self.enabled or self._conn is None:
             return False
         with self._lock:
-            if self._active_id is None:
-                if not self._ensure_active():
-                    return False
+            if self._active_id is None and not self._ensure_active():
+                return False
             try:
                 success = record.get("success")
-                self._pending_events.append((
-                    self._active_id,
-                    self._seq,
-                    record.get("time"),
-                    record.get("event"),
-                    record.get("node"),
-                    record.get("sf"),
-                    record.get("rssi"),
-                    record.get("snr"),
-                    record.get("gateway"),
-                    1 if success is True else (0 if success is False else None),
-                ))
+                self._pending_events.append(
+                    (
+                        self._active_id,
+                        self._seq,
+                        record.get("time"),
+                        record.get("event"),
+                        record.get("node"),
+                        record.get("sf"),
+                        record.get("rssi"),
+                        record.get("snr"),
+                        record.get("gateway"),
+                        1 if success is True else (0 if success is False else None),
+                    )
+                )
                 self._seq += 1
                 self._last_time = record.get("time")
                 # 批量触发条件：COUNT 或 TIME 任一满足
@@ -372,8 +377,12 @@ class ExperimentRecorder:
                     gateways_json = ?
                 WHERE id = ?
                 """,
-                (_to_json(final_stats), _to_json(nodes), _to_json(gateways),
-                 self._active_id),
+                (
+                    _to_json(final_stats),
+                    _to_json(nodes),
+                    _to_json(gateways),
+                    self._active_id,
+                ),
             )
             self._conn.commit()
             self._active_id = None
@@ -463,6 +472,7 @@ class ExperimentRecorder:
 
 
 # ---------- 行 -> dict 转换 ----------
+
 
 def _experiment_summary(row):
     return {

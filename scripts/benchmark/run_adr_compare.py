@@ -21,12 +21,14 @@ docs/benchmark/figures/adr_compare.png (2x2 paper-quality panels).
 
 Does NOT modify any simulator/ gateway/ backend/ source.
 """
+
 import os
 import statistics
 import sys
 
-import pandas as pd
 import matplotlib
+import pandas as pd
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -36,7 +38,6 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 from common import BenchmarkEngine  # noqa: E402
-
 
 # Sweep over deployment scale. 2000 m is the inert baseline; 3000-4000 m show
 # the ADR SF-adaptation onset; 5000-8000 m show the full PDR rescue gap.
@@ -81,8 +82,9 @@ def run_case(area_size, adr_enabled):
         "avg_sf": round(statistics.mean(sfs), 3) if sfs else None,
         "avg_rssi": round(statistics.mean(rssis), 3) if rssis else None,
         "throughput": round(stats.get("throughput", 0.0), 4),
-        "collision_rate": round(
-            failed / (success + failed), 4) if (success + failed) else 0.0,
+        "collision_rate": round(failed / (success + failed), 4)
+        if (success + failed)
+        else 0.0,
     }
 
 
@@ -110,9 +112,14 @@ def main():
     # Panel 1: PDR
     for adr in ("ON", "OFF"):
         sub = df[df.adr == adr]
-        axes[0, 0].plot(sub.area_size, sub.pdr, marker=markers[adr],
-                        color=colors[adr], linestyle=linestyles[adr],
-                        label=f"ADR {adr}")
+        axes[0, 0].plot(
+            sub.area_size,
+            sub.pdr,
+            marker=markers[adr],
+            color=colors[adr],
+            linestyle=linestyles[adr],
+            label=f"ADR {adr}",
+        )
     axes[0, 0].set_title("PDR vs Deployment Area")
     axes[0, 0].set_xlabel("Area size (m, square side)")
     axes[0, 0].set_ylabel("Packet Delivery Ratio")
@@ -122,9 +129,14 @@ def main():
     # Panel 2: Packet Loss
     for adr in ("ON", "OFF"):
         sub = df[df.adr == adr]
-        axes[0, 1].plot(sub.area_size, sub.packet_loss, marker=markers[adr],
-                        color=colors[adr], linestyle=linestyles[adr],
-                        label=f"ADR {adr}")
+        axes[0, 1].plot(
+            sub.area_size,
+            sub.packet_loss,
+            marker=markers[adr],
+            color=colors[adr],
+            linestyle=linestyles[adr],
+            label=f"ADR {adr}",
+        )
     axes[0, 1].set_title("Packet Loss vs Deployment Area")
     axes[0, 1].set_xlabel("Area size (m, square side)")
     axes[0, 1].set_ylabel("Packet Loss (1 - PDR)")
@@ -134,9 +146,14 @@ def main():
     # Panel 3: Average SF (the ADR adaptation mechanism)
     for adr in ("ON", "OFF"):
         sub = df[df.adr == adr]
-        axes[1, 0].plot(sub.area_size, sub.avg_sf, marker=markers[adr],
-                        color=colors[adr], linestyle=linestyles[adr],
-                        label=f"ADR {adr}")
+        axes[1, 0].plot(
+            sub.area_size,
+            sub.avg_sf,
+            marker=markers[adr],
+            color=colors[adr],
+            linestyle=linestyles[adr],
+            label=f"ADR {adr}",
+        )
     axes[1, 0].set_title("Average SF vs Deployment Area")
     axes[1, 0].set_xlabel("Area size (m, square side)")
     axes[1, 0].set_ylabel("Average Spreading Factor")
@@ -146,17 +163,25 @@ def main():
     # Panel 4: Average RSSI (control - must overlap: geometry is invariant)
     for adr in ("ON", "OFF"):
         sub = df[df.adr == adr]
-        axes[1, 1].plot(sub.area_size, sub.avg_rssi, marker=markers[adr],
-                        color=colors[adr], linestyle=linestyles[adr],
-                        label=f"ADR {adr}")
+        axes[1, 1].plot(
+            sub.area_size,
+            sub.avg_rssi,
+            marker=markers[adr],
+            color=colors[adr],
+            linestyle=linestyles[adr],
+            label=f"ADR {adr}",
+        )
     axes[1, 1].set_title("Average RSSI vs Deployment Area (control)")
     axes[1, 1].set_xlabel("Area size (m, square side)")
     axes[1, 1].set_ylabel("Average RSSI (dBm)")
     axes[1, 1].legend()
     axes[1, 1].grid(True, alpha=0.3)
 
-    fig.suptitle("Benchmark 2 — ADR ON/OFF under Link-Budget Stress",
-                 fontsize=14, fontweight="bold")
+    fig.suptitle(
+        "Benchmark 2 — ADR ON/OFF under Link-Budget Stress",
+        fontsize=14,
+        fontweight="bold",
+    )
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     out_png = "docs/benchmark/figures/adr_compare.png"
     fig.savefig(out_png, dpi=130)

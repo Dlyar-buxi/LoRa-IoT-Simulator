@@ -10,10 +10,11 @@
 
 import json
 
+from fastapi.testclient import TestClient
+
 from backend import mqtt_client
 from backend.engine import SimulationEngine
 from backend.main import app
-from fastapi.testclient import TestClient
 
 
 # ---------- 1. sink 收到 step 数据 ----------
@@ -47,8 +48,14 @@ def test_mqtt_publish_topic_and_payload():
     c._client = fake
     c.connected = True  # 模拟已连上 broker
     rec = {
-        "time": 5.45, "event": "TRANSMIT", "node": "Node001", "sf": 7,
-        "rssi": -104.6, "snr": 15.3, "gateway": "GW001", "success": True,
+        "time": 5.45,
+        "event": "TRANSMIT",
+        "node": "Node001",
+        "sf": 7,
+        "rssi": -104.6,
+        "snr": 15.3,
+        "gateway": "GW001",
+        "success": True,
     }
     ok = c.publish("lora/device/data", rec, qos=0, retain=False)
     assert ok is True
@@ -73,15 +80,14 @@ def test_mqtt_publish_noop_when_disconnected():
 
 # ---------- 4. /ws 实时推送 ----------
 def test_ws_streams_telemetry():
-    with TestClient(app) as client:
-        with client.websocket_connect("/ws") as ws:
-            client.post("/api/simulation/reset")
-            client.post("/api/simulation/start")
-            client.post("/api/simulation/step?steps=3")
-            msg = ws.receive_json()
-            assert msg["event"] == "TRANSMIT"
-            assert "node" in msg and "success" in msg
-            assert msg["gateway"] in ("GW001", "GW002")
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        client.post("/api/simulation/reset")
+        client.post("/api/simulation/start")
+        client.post("/api/simulation/step?steps=3")
+        msg = ws.receive_json()
+        assert msg["event"] == "TRANSMIT"
+        assert "node" in msg and "success" in msg
+        assert msg["gateway"] in ("GW001", "GW002")
 
 
 if __name__ == "__main__":
