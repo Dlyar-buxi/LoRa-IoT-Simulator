@@ -159,3 +159,23 @@ reception and ADR logic. Exactly where the call is inserted is decided in Task 3
 - No ML training, RL, or calibration.
 
 Goal: **freeze the API so the rest of the system can depend on a stable contract.**
+
+## 9. Open Questions / Follow-ups (recorded Sprint 6.3.4 Task 2.3 review)
+
+- **PDR 100% is NOT a performance metric.** v0.1 has no shadowing / Rayleigh / collision
+  coupling, so PDR saturates at ~100% in default scenarios. That only proves the adapter
+  works — not that channel quality is good. The integration smoke test was therefore
+  renamed `test_simulation_channel_integration` and its docstring states it is a smoke
+  test, not a performance benchmark (see `simulator/test_simulation.py`).
+
+- **Legacy `LoRaChannel` end-state goal.** Today two physical worlds coexist:
+  `simulation` runs through `ChannelModelLinkAdapter(LogDistanceChannel)` while
+  `gateway_selector` still uses legacy `LoRaChannel`. The Sprint 6.3.4 end-state should
+  converge on a single `ChannelModel`: migrate `gateway_selector.calculate_link` onto
+  `ChannelModelLinkAdapter.evaluate`, then delete or move `propagation.py` ->
+  `legacy/propagation.py`. Short-term, both interfaces stay compatible (regression
+  verified) — no rush to break existing tests.
+
+- **Validation layer is in place.** `simulator/test_channel_model_validation.py` guards
+  ADR-001's physical laws (distance monotonicity) and the "Simulator does not depend on a
+  concrete physical model" thesis (model-substitution test).
