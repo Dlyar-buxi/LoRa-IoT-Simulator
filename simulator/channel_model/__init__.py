@@ -23,6 +23,7 @@ from simulator.channel_model.base import (
 )
 from simulator.channel_model.log_distance import LogDistanceChannel
 from simulator.channel_model.shadowing import ShadowingChannel
+from simulator.channel_model.rayleigh import RayleighChannel
 
 __all__ = [
     "ChannelModel",
@@ -30,6 +31,7 @@ __all__ = [
     "TransmissionContext",
     "LogDistanceChannel",
     "ShadowingChannel",
+    "RayleighChannel",
     "ChannelModelLinkAdapter",
     "SPEED_OF_LIGHT",
     "SF_SENSITIVITY",

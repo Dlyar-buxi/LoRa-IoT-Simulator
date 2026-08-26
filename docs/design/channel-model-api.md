@@ -134,9 +134,9 @@ new subclass of `ChannelModel` — nothing else in the codebase changes.
 
 | Implementation | Models | v-target |
 |---|---|---|
-| `LogDistanceChannel` | distance → path loss → RSSI → SNR → PDR | v0.1 (baseline) |
-| `ShadowingChannel` | + log-normal random shadowing | v0.2 |
-| `RayleighChannel` | + multipath Rayleigh fading | v0.3 |
+| `LogDistanceChannel` | distance → path loss → RSSI → SNR → PDR | v0.1 (baseline, ✅) |
+| `ShadowingChannel` | + log-normal random shadowing | v0.2 (✅, Task 3) |
+| `RayleighChannel` | + multipath Rayleigh fading (small-scale) | v0.3 (✅, Task 4) |
 | `UrbanChannel` | + building / obstruction loss | v0.4 |
 | `MLChannelModel` | learned mapping context → result | future |
 | `DigitalTwinChannel` | live environment mirror | future |
@@ -179,3 +179,8 @@ Goal: **freeze the API so the rest of the system can depend on a stable contract
 - **Validation layer is in place.** `simulator/test_channel_model_validation.py` guards
   ADR-001's physical laws (distance monotonicity) and the "Simulator does not depend on a
   concrete physical model" thesis (model-substitution test).
+
+- **RayleighChannel implemented (Task 4).** Third `ChannelModel` subclass, using
+  *composition* (HAS-A `LogDistanceChannel` for the deterministic path loss) rather than
+  inheritance — proving the "Simulator does not depend on a concrete physical model" thesis
+  holds for *parallel* model types (small-scale fading), not only IS-A subclasses.
