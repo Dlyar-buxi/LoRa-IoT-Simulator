@@ -45,6 +45,9 @@ class ShadowingChannel(LogDistanceChannel):
         """
         sigma:
             阴影标准差 σ (dB); 典型 4~8 dB。σ=0 退化为 LogDistanceChannel。
+            【配置冻结 v1 · fallback only】默认 7.0 为模型内部兜底, **非** config.SHADOW_SIGMA (4.0)。
+            生产路径须显式传 config.SHADOW_SIGMA (simulation / 测试官方调用); 旧 API ShadowingChannel() 仍可用。
+            优先级: 显式构造参数 (config 注入)  >  默认 7.0。
         seed:
             int 时确定性复现; None 走系统熵 (非确定)。
         """

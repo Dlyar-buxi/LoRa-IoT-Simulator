@@ -50,7 +50,11 @@ SF_SENSITIVITY = {
 }
 
 # 环境 -> 默认路径损耗指数 (n)。
-# 仅作 LogDistanceChannel 基线参考; 不改变接口契约, 可用构造参数覆盖。
+# 【配置冻结 v1 · fallback only】这是模型内部的兜底查表, **不是**参数事实来源。
+# 生产路径由 simulation 注入 config.PATH_LOSS_EXPONENT (显式构造参数);
+# 仅当调用方未传 path_loss_exponent 时才回退到此表。优先级 (见 log_distance._exponent):
+#   显式构造参数 (config 注入)  >  ENV_PATH_LOSS_EXPONENT[environment]  >  3.0
+# 详见 docs/design/channel-config-v1.md §5/§7。
 ENV_PATH_LOSS_EXPONENT = {
     "urban": 3.5,
     "suburban": 3.0,
