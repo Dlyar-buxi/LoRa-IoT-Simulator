@@ -195,6 +195,22 @@ app = FastAPI(
 # P1-6: 注册可选 API Key 认证。env 未设置 API_KEY 时内部短路，零行为变化。
 register_auth(app)
 
+
+@app.get("/health", tags=["ops"])
+def health_check():
+    """轻量健康检查点（供 Docker HEALTHCHECK / k8s liveness 探测）。
+
+    不访问 engine 单例或数据库，保证在任意初始化阶段都能返回 200（引擎
+    尚未 build 也能过）。如果将来想把 DB/WsManager 健康度加进来，可扩展
+    为带 checks 的结构化响应。
+    """
+    return {
+        "status": "ok",
+        "service": "lora-iot-simulator",
+        "version": app.version,
+    }
+
+
 app.include_router(router)
 
 
