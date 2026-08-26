@@ -3,7 +3,9 @@ LoRa channel link test
 """
 
 from simulator.packet import Packet
-from simulator.channel import LoRaChannel
+from simulator import config
+from simulator.channel_model import ChannelModelLinkAdapter
+from simulator.channel_model import ShadowingChannel
 
 
 class MockGateway:
@@ -26,7 +28,17 @@ def test_channel():
     packet.y = 1200
 
     gateway = MockGateway()
-    channel = LoRaChannel()
+    # Legacy LoRaChannel 等价新实现 (见 legacy-channel-migration.md §8 Option A):
+    # = LogDistance(n=3.0) + Gaussian shadow(σ=4), 经 adapter 接入。
+    # environment 不在构造函数里, 由 ChannelModelLinkAdapter 默认 "suburban"
+    # 在 evaluate 阶段注入 -> ENV_PATH_LOSS_EXPONENT["suburban"]=3.0, 对齐
+    # legacy n=3.0; sigma 对齐 legacy 固定阴影 σ=4。
+    channel = ChannelModelLinkAdapter(
+        ShadowingChannel(
+            sigma=config.SHADOW_SIGMA,
+            seed=config.SEED,
+        )
+    )
 
     result = channel.calculate_link(packet, gateway)
 
