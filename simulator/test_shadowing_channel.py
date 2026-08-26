@@ -8,7 +8,7 @@ ShadowingChannel — 验证套件 (Sprint 6.3.4 · Task 3.3)
 import math
 
 from simulator.channel_model import ChannelResult, LogDistanceChannel
-from simulator.shadowing_channel import ShadowingChannel
+from simulator.channel_model import ShadowingChannel
 from simulator.test_channel_model import _make_context
 
 
