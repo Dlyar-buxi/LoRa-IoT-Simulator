@@ -137,6 +137,115 @@ simulator/simulation.py
 - The simulation core has **zero knowledge** of MQTT, WebSocket, or SQLite — it only
   calls the injected sink during `step()`.
 
+## ChannelModel Architecture (v6.4)
+
+> Frozen in Sprint 6.4 and tagged **`v6.4-channel-model`**. The channel subsystem was refactored from a legacy single-file propagation stack (removed in 5.2.2) into a pluggable `ChannelModel` API. Design rationale: [`docs/design/channel-presentation-v1.md`](docs/design/channel-presentation-v1.md).
+
+### Overview
+
+**Why refactor.** The legacy stack scattered the physics (Friis / log-distance / shadowing / Rayleigh) across `propagation.py` / `channel.py` / `shadowing_channel.py`, with implicit coupling and no single source of truth for parameters. Consumers read channel fields straight off `Packet`, blurring the model-output / simulation-entity boundary.
+
+**What changed.** A unified `ChannelModel` interface — `evaluate(context: TransmissionContext) -> ChannelResult` — lets all three models share one output contract. `ChannelResult` is now the **retained, self-describing** carrier of a single link's physical outcome (it carries `distance` / `path_loss` and is kept alive as `packet.channel_result` by the adapter). A zero-intrusion `LinkBudget` layer decomposes that result into an interpretable link budget without touching any physics.
+
+**Benefits.**
+- **Unified contract** — three models, one `ChannelResult`; consumers stop caring which model ran.
+- **Full lifecycle** — `ChannelResult` survives the adapter call as a `packet.channel_result` handle.
+- **Interpretable** — `LinkBudget` makes `Tx → PathLoss → (Shadowing | Fading) → ReceivedPower → Noise → SNR → PDR` explicit.
+- **Clean config boundary** — `config.py` is the single parameter source; the model layer has **zero** `config` imports.
+
+### Architecture
+
+```
+config.py  (single source of truth)
+        │
+        ▼
+TransmissionContext
+        │
+        ▼
+ChannelModel  (evaluate(context) -> ChannelResult)
+        ├── LogDistanceChannel
+        ├── ShadowingChannel
+        └── RayleighChannel
+                │
+                ▼
+         ChannelResult  (rssi / snr / pdr / distance / path_loss)
+                │
+                ▼
+            LinkBudget  (decompose, read-only)
+                │
+                ▼
+            Simulation / consumers
+```
+
+Three hard boundaries (frozen across 6.4):
+- `ChannelModel` is the **output contract** — consumers depend on `ChannelResult`, never on a model's internals.
+- `LinkBudget` is an **interpretation layer only** — it decomposes a result; it never changes `rssi` / `snr` / `pdr` or any random process. Invariant: `received_power = tx_power − path_loss + shadowing_loss + fading_gain`.
+- `config` is the **single parameter source** — parameters flow one way `config → TransmissionContext → ChannelModel`; the model layer never imports `config`.
+
+### Channel Models
+
+| Model | Path Loss | Shadowing (large-scale) | Small-scale Fading |
+| --- | --- | --- | --- |
+| `LogDistanceChannel` | ✓ | — | — |
+| `ShadowingChannel` | ✓ | Gaussian (σ = `config.SHADOW_SIGMA` = 4.0) | — |
+| `RayleighChannel` | ✓ | — | Rayleigh (`h ~ CN(0,1)`, `E[|h|²] = 1`) |
+
+All three share the common chain `tx_power → path_loss → received_power → noise_floor → snr → pdr`. Model-specific extras: `ShadowingChannel` adds `shadowing_loss` (Gaussian); `RayleighChannel` adds `fading_gain` (small-scale, `E[fading_gain] ≈ 1`); `LogDistanceChannel` adds neither.
+
+**Configuration ownership.** Every wireless parameter is injected via constructor argument or `TransmissionContext` — the model layer imports **no** `config`. Internal defaults (e.g. `ShadowingChannel(sigma=7.0)`) exist only as fallbacks; callers must explicitly pass the config value (`config.SHADOW_SIGMA`). See [`docs/design/channel-config-v1.md`](docs/design/channel-config-v1.md).
+
+### Link Budget Decomposition
+
+`LinkBudget` is a pure, read-only decomposition of an already-computed `ChannelResult` — it introduces no new physics and no new packet API. Public API:
+
+```python
+from simulator.channel_model import ChannelModel, TransmissionContext, ChannelResult
+from simulator.channel_model.link_budget import decompose, LinkBudgetResult
+
+# `channel` is any ChannelModel (LogDistance / Shadowing / Rayleigh)
+# `context` is the TransmissionContext the model was evaluated against
+result: ChannelResult = channel.evaluate(context)
+budget: LinkBudgetResult = decompose(channel, context)
+# budget.received_power == result.rssi  (invariant, within float tolerance)
+```
+
+`LinkBudgetResult` exposes `tx_power`, `path_loss`, `shadowing_loss`, `fading_gain`, `received_power`, `noise_power`, `snr` — the interpretable intermediate states of one link, ready for charts or Monte-Carlo summaries. See [`docs/design/link-budget-v1.md`](docs/design/link-budget-v1.md).
+
+### Validation
+
+The channel subsystem is locked by a focused, flaky-resistant test suite:
+
+```bash
+pytest -q simulator
+```
+
+```
+41 passed
+```
+
+Eight validation dimensions, all green:
+
+| Dimension | Evidence |
+| --- | --- |
+| `ChannelResult` lifecycle (retained as `packet.channel_result`) | `test_channel_model.py`, `test_rayleigh_channel.py`, `test_channel_model_validation.py` |
+| `distance` / `path_loss` self-describing | `test_channel_result_statistics.py::test_distance_propagates_to_result` |
+| `path_loss` strictly monotonic in distance | `test_channel_result_statistics.py::test_log_distance_path_loss_monotonic` |
+| Shadowing σ converges ≈ `config.SHADOW_SIGMA` | `test_channel_result_statistics.py::test_shadowing_sigma_statistics` |
+| Rayleigh `E[|h|²] ≈ 1` (via public `ChannelResult` only) | `test_channel_result_statistics.py::test_rayleigh_power_statistics` |
+| LinkBudget invariant `received_power = tx_power − path_loss + shadowing_loss + fading_gain` | `test_link_budget.py::test_core_invariant_holds_for_all_models` |
+| Adapter backward compatibility (`packet.channel_result.rssi == packet.rssi`) | `test_channel_result_statistics.py::test_adapter_backward_compatibility` |
+| Config ownership decoupling (zero model-layer `config` dependency) | `test_channel_config_ownership.py` (5 tests) |
+
+### Release
+
+This architecture is frozen and tagged:
+
+```
+Release: v6.4-channel-model  →  fe08285
+```
+
+Design freeze documents: [`channel-presentation-v1.md`](docs/design/channel-presentation-v1.md), [`link-budget-v1.md`](docs/design/link-budget-v1.md), [`channel-config-v1.md`](docs/design/channel-config-v1.md), [`channel-architecture-v1.md`](docs/design/channel-architecture-v1.md).
+
 ## Quick Demo
 
 The fastest way to see the simulator running **with sample data** — no code edits, no manual configuration.
