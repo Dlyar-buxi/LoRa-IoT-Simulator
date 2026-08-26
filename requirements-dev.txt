@@ -1,0 +1,13 @@
+# Development / CI-only dependencies.
+# Install alongside runtime deps:
+#   pip install -r requirements.txt -r requirements-dev.txt
+
+# Test runner + coverage gate (CI blocks below 60%)
+pytest>=8.0
+pytest-cov>=5.0
+
+# Lint + format (unified via `ruff`)
+ruff>=0.6
+
+# Git-commit guard (optional to install; CI runs the checks directly too)
+pre-commit>=3.7

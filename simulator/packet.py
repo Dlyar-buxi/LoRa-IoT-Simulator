@@ -39,16 +39,6 @@ class Packet:
     success: bool = False
     retry_count: int = 0
 
-    # channel model result (Sprint 6.3.4 Channel Model v0.1)
-    pdr: float | None = None
-    packet_received: bool | None = None
-    propagation_delay: float | None = None
-
-    # full ChannelModel result handle (Sprint 6.4 — 完整输出引用, 自描述链路)
-    # 字符串注解避免与 channel_model.base 形成 import 耦合; 不进 to_dict 以免
-    # 序列化对象。旧消费者读 rssi/snr/success 兼容面, 不受影响。
-    channel_result: "ChannelResult" = None
-
     def to_dict(self):
         return {
             "node_id": self.node_id,
@@ -63,7 +53,4 @@ class Packet:
             "collision": self.collision,
             "success": self.success,
             "retry_count": self.retry_count,
-            "pdr": self.pdr,
-            "packet_received": self.packet_received,
-            "propagation_delay": self.propagation_delay,
         }

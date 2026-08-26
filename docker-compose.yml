@@ -45,26 +45,6 @@ services:
       - source: mosquitto_conf
         target: /mosquitto/config/mosquitto.conf
 
-  # One-shot demo data seeder. Opt-in only: `docker compose --profile demo up`.
-  # Seeds a sample experiment into the shared experiments-db volume so the
-  # backend's dashboard / experiment views are populated on first launch.
-  # Disabled by default, so a plain `docker compose up` stays clean (Demo != Production).
-  demo-init:
-    build: .
-    profiles: ["demo"]
-    command:
-      - sh
-      - -c
-      - >-
-        python scripts/generate_experiment.py --nodes 20 --area 400 --seed 1
-        --duration 60 --gateways 2 --db /app/data/experiments.db &&
-        python scripts/export_report.py --db /app/data/experiments.db --out /app/data/demo_report.md
-    volumes:
-      - experiments-db:/app/data
-    depends_on:
-      - backend
-    restart: "no"
-
 volumes:
   experiments-db:
 

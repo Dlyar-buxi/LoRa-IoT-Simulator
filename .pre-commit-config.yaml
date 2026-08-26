@@ -1,0 +1,37 @@
+repos:
+  # ---- Python format + lint (unified Ruff)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      # Run the formatter.
+      - id: ruff-format
+        name: ruff format
+        types_or: [python, pyi]
+      # Run the linter (auto-fixes everything ruff itself can).
+      - id: ruff-check
+        name: ruff check --fix
+        types_or: [python, pyi]
+        args: [--fix]
+
+  # ---- General housekeeping
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        name: strip trailing whitespace
+      - id: end-of-file-fixer
+        name: end-of-file newline fixer
+      - id: mixed-line-ending
+        name: normalize line endings
+        args: [--fix=lf]
+      - id: check-yaml
+        name: validate YAML (CI, dependabot, pre-commit)
+      - id: check-toml
+        name: validate pyproject.toml
+      - id: check-merge-conflict
+        name: reject merge-conflict markers
+      - id: check-case-conflict
+        name: case-conflict detector
+      - id: check-added-large-files
+        name: flag large additions (>500KB)
+        args: [--maxkb=500]

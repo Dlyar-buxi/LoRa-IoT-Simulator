@@ -21,13 +21,15 @@ average PDR over N_SEEDS independent shadow-fading realizations per distance
 Outputs: docs/benchmark/distance.csv and
 docs/benchmark/figures/distance_pdr.png.
 """
+
 import os
+import random
 import statistics
 import sys
-import random
 
-import pandas as pd
 import matplotlib
+import pandas as pd
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -37,9 +39,9 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 from common import BenchmarkEngine  # noqa: E402
-from simulator.node import SensorNode  # noqa: E402
-from gateway.gateway import Gateway  # noqa: E402 noqa
 
+from gateway.gateway import Gateway  # noqa: E402 noqa
+from simulator.node import SensorNode  # noqa: E402
 
 DISTANCES = [100, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000]
 NODE_COUNT = 1
@@ -75,7 +77,7 @@ def run_one(distance, seed, adr_enabled=False):
     engine = DistanceBenchmarkEngine(distance=distance)
     engine.configure(
         node_count=NODE_COUNT,
-        adr_enabled=adr_enabled,    # False -> SF pinned at DEFAULT_SF=7
+        adr_enabled=adr_enabled,  # False -> SF pinned at DEFAULT_SF=7
         seed=seed,
         duration=DURATION,
     )
@@ -93,16 +95,20 @@ def sweep(adr_enabled):
         pdrs = [run_one(d, SEED_BASE + s, adr_enabled) for s in range(N_SEEDS)]
         mean_pdr = statistics.mean(pdrs)
         std_pdr = statistics.pstdev(pdrs) if len(pdrs) > 1 else 0.0
-        rows.append({
-            "distance_m": d,
-            "adr": label,
-            "pdr_mean": round(mean_pdr, 4),
-            "pdr_std": round(std_pdr, 4),
-            "pdr_min": round(min(pdrs), 4),
-            "pdr_max": round(max(pdrs), 4),
-        })
-        print(f"[{label}] distance={d:5d}m  meanPDR={mean_pdr:.3f}  "
-              f"std={std_pdr:.3f}  [min={min(pdrs):.2f}, max={max(pdrs):.2f}]")
+        rows.append(
+            {
+                "distance_m": d,
+                "adr": label,
+                "pdr_mean": round(mean_pdr, 4),
+                "pdr_std": round(std_pdr, 4),
+                "pdr_min": round(min(pdrs), 4),
+                "pdr_max": round(max(pdrs), 4),
+            }
+        )
+        print(
+            f"[{label}] distance={d:5d}m  meanPDR={mean_pdr:.3f}  "
+            f"std={std_pdr:.3f}  [min={min(pdrs):.2f}, max={max(pdrs):.2f}]"
+        )
     return rows
 
 
@@ -120,21 +126,29 @@ def main():
     colors = {"ADR OFF": "#d62728", "ADR ON": "#2ca02c"}
     for adr in ("ADR OFF", "ADR ON"):
         sub = df[df.adr == adr]
-        ax.plot(sub.distance_m, sub.pdr_mean, marker="o",
-                color=colors[adr], linewidth=2,
-                label=f"Mean PDR ({adr})")
+        ax.plot(
+            sub.distance_m,
+            sub.pdr_mean,
+            marker="o",
+            color=colors[adr],
+            linewidth=2,
+            label=f"Mean PDR ({adr})",
+        )
         ax.fill_between(
             sub.distance_m,
             (sub.pdr_mean - sub.pdr_std).clip(lower=0),
             (sub.pdr_mean + sub.pdr_std).clip(upper=1),
-            color=colors[adr], alpha=0.15,
+            color=colors[adr],
+            alpha=0.15,
         )
     ax.axhline(1.0, ls="--", color="gray", alpha=0.5)
     ax.axhline(0.0, ls="--", color="gray", alpha=0.5)
     ax.set_xlabel("Distance from gateway (m)")
     ax.set_ylabel("Packet Delivery Ratio (PDR)")
-    ax.set_title("Benchmark 3 — LoRa Link Reliability vs Distance\n"
-                 "(1 node, 1 gateway, SF7 baseline, TX=14 dBm)")
+    ax.set_title(
+        "Benchmark 3 — LoRa Link Reliability vs Distance\n"
+        "(1 node, 1 gateway, SF7 baseline, TX=14 dBm)"
+    )
     ax.set_ylim(-0.05, 1.1)
     ax.grid(True, alpha=0.3)
     ax.legend(loc="upper right")

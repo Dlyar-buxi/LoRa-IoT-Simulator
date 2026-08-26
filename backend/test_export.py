@@ -29,8 +29,7 @@ def main():
     # 2) Packet export
     packets = eng.get_packets()
     ok_packet = all(
-        {"time", "event", "node", "sf", "rssi", "snr", "gateway", "success"}
-        <= set(p)
+        {"time", "event", "node", "sf", "rssi", "snr", "gateway", "success"} <= set(p)
         for p in packets
     )
     print("Packet export:")
@@ -53,14 +52,18 @@ def main():
     # 关键自洽：history 中 success 数 == 状态里的 received（get_statistics 不含 received 键）
     success_count = sum(1 for p in packets if p["success"])
     assert success_count == eng.get_status()["received"], (
-        f"success in history {success_count} != received "
-        f"{eng.get_status()['received']}"
+        f"success in history {success_count} != received {eng.get_status()['received']}"
     )
 
     # 4) JSON export
     export = eng.get_export()
     ok_export = {
-        "status", "nodes", "gateways", "statistics", "packets", "history"
+        "status",
+        "nodes",
+        "gateways",
+        "statistics",
+        "packets",
+        "history",
     } <= set(export)
     print("JSON export:")
     print("PASS" if ok_export else "FAIL")

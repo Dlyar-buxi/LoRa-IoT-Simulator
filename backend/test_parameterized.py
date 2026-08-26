@@ -12,10 +12,9 @@ import os
 # 禁用 SQLite Recorder，避免本测试在项目中落盘 experiments.db
 os.environ.setdefault("DB_ENABLED", "false")
 
-from simulator import config
-
 from backend.engine import SimulationEngine
 from backend.main import app
+from simulator import config
 
 
 def test_default_singleton_behavior():
@@ -137,8 +136,14 @@ def test_api_config_endpoint():
         assert r.json()["node_count"] == 50
 
         # 非法参数 -> 400
-        assert client.post("/api/simulation/config", json={"node_count": 0}).status_code == 400
-        assert client.post("/api/simulation/config", json={"gateways": []}).status_code == 400
+        assert (
+            client.post("/api/simulation/config", json={"node_count": 0}).status_code
+            == 400
+        )
+        assert (
+            client.post("/api/simulation/config", json={"gateways": []}).status_code
+            == 400
+        )
         assert (
             client.post(
                 "/api/simulation/config",
@@ -177,5 +182,6 @@ if __name__ == "__main__":
     if failed:
         print(f"REGRESSION FAIL={failed}")
         import sys
+
         sys.exit(1)
     print("REGRESSION PASS (parameterized)")

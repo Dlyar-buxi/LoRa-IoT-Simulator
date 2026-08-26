@@ -1,7 +1,13 @@
 # LoRa IoT Simulator
 
-![Tests](https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/actions/workflows/test.yml/badge.svg)
+![Tests & Quality](https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/actions/workflows/test.yml/badge.svg)
+![CodeQL](https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/actions/workflows/codeql.yml/badge.svg)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+![Coverage](https://img.shields.io/badge/Coverage-83%25-brightgreen)
+[![Dependabot](https://img.shields.io/badge/Dependabot-enabled-blue?logo=dependabot)](.github/dependabot.yml)
+![Docker](https://img.shields.io/badge/Docker-multistage%20non--root-2496ED?logo=docker)
 [![Release](https://img.shields.io/github/v/release/Dlyar-buxi/LoRa-IoT-Simulator)](https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/releases)
+![License](https://img.shields.io/github/license/Dlyar-buxi/LoRa-IoT-Simulator)
 
 A full-stack LoRa LPWAN network simulation & monitoring platform — from embedded
 sensor nodes, through LoRa PHY/MAC and gateways, all the way to a live Web
@@ -10,6 +16,10 @@ dashboard with MQTT telemetry export and SQLite experiment persistence.
 > The simulation core (`simulator/`, `gateway/`) is **frozen** since Sprint 4.
 > The backend is a pure **Adapter** layer: the simulation core never imports any
 > backend or frontend code, and has zero knowledge of MQTT, WebSocket, or SQLite.
+>
+> **Frozen-core diff guarantee:** `git diff --stat -- simulator/ gateway/` is
+> empty for every sprint after Sprint 4 — all new features live exclusively in
+> the Adapter / frontend / release layers.
 
 ## Dashboard Preview
 
@@ -92,235 +102,96 @@ Results are written to `docs/benchmark/` and can be regenerated at any time.
 - **SQLite experiment persistence** — full topology + per-event telemetry recorded; replay & A/B compare.
 - **Parameterized experiment platform** — inject node count / area / gateway placement / seed / ADR at runtime via REST.
 - **Resilient by design** — MQTT, SQLite and WebSocket failures degrade silently; nothing crashes the sim.
-- **Hermetic test suite** — 14/14 regression across backend + simulator + gateway; frozen-core diff always empty.
+- **Hermetic test suite** — 23/23 regression across backend (9 tests) + simulator (10 tests) + gateway (1 test × 4 configs), measured 83% line coverage (fail-under=60% in CI); frozen-core diff always empty.
 - **One-command automation** — headless experiment generation + Markdown report (`scripts/`), no web server required.
 
 ## Architecture
 
-```
-        FastAPI Backend (backend/)
-                  |
-        SimulationEngine  <-- Adapter layer (backend/engine.py)
-                  |
-        Simulator Core (Frozen: simulator/)
-                  |
-     +------------+------------+
-     |            |            |
-   MQTT       WebSocket      SQLite
- Telemetry    Dashboard      Recorder
-(lora/       (/ws, live)   (experiments.db)
- device/
- data)
+```mermaid
+flowchart LR
+    FE[Web Dashboard\nvanilla JS + SVG] -->|REST /api/*| BE
+    FE -->|WebSocket /ws| BE
+    FE -->|X-API-Key header| BE
+    FE -->|?token= query| BE
+
+    subgraph FastAPI Backend (backend/)
+        AUTH[API Key Middleware\nBaseHTTPMiddleware + inline WS check]
+        ROUTES[REST routes · models]
+        subgraph ADAPTER[SimulationEngine Adapter\nthreading.RLock · deque history\nlifecycle hooks register_*_hook]
+            ENG[SimulationEngine singleton]
+        end
+    end
+
+    ENG -->|step() / get_*()| CORE
+
+    subgraph SIMULATOR CORE — FROZEN (simulator/ + gateway/)
+        CORE[LoRa PHY + MAC · ADR · ALOHA\nenergy model · DES heapq scheduler\nmulti-gateway RSSI selector]
+    end
+
+    ENG -. telemetry_sink(record) .-> MQTT
+    ENG -. telemetry_sink(record) .-> WS
+    ENG -. telemetry_sink(record) .-> DB
+    MQTT[MQTT publish\nlora/device/data\nsilent degrade]
+    WS[WebSocket broadcast\ndashboard live\nasyncio.Lock on client set]
+    DB[SQLite Recorder\nWAL journal + batch flush\nthreading.Lock]
 ```
 
-- **`simulator/`** — Core simulation layer (nodes, sensor, channel, MAC, energy, ADR). **Frozen.**
-- **`gateway/`** — LoRa gateway / network layer. **Frozen.**
-- **`backend/`** — Adapter layer: FastAPI app, REST + WS, telemetry sink, SQLite recorder, MQTT client.
+### Key boundaries
+
+| Layer | Directory | Role | Frozen? |
+|-------|-----------|------|:-------:|
+| Presentation | `frontend/` | Vanilla JS + SVG dashboard, API Key UI, toast system, WS reconnect | No |
+| Auth | `backend/auth.py` | `X-API-Key` on REST + `?token=` on WebSocket when `API_KEY` env is set | No |
+| Adapter | `backend/` | FastAPI app, engine wrapper, lifecycle hooks, telemetry sinks | No |
+| Simulation Core | `simulator/` | LoRa PHY/MAC, energy, ADR, DES heapq engine | **YES** |
+| Network | `gateway/` | LoRa gateway packet collection + RSSI aggregation | **YES** |
 
 ### Data flow
 
 ```
 simulator/simulation.py
-   └─> SimulationEngine.step()
-          └─> telemetry_sink(record)        # a single injected callable
-                 ├─> MQTT  publish lora/device/data   (optional, silent degrade)
-                 ├─> WS    broadcast to /ws clients    (live dashboard)
-                 └─> SQLite recorder.record_event()    (optional, silent degrade)
+   └─> SimulationEngine.step()          # held by threading.RLock
+          ├─> history.append(record)    # deque(maxlen=10000) ring buffer
+          └─> if sink: sink(record)     # single injected callable
+                 ├─> MQTT  publish lora/device/data  (optional, silent degrade)
+                 ├─> WS    broadcast to /ws clients   (live dashboard, asyncio.Lock)
+                 └─> SQLite recorder.record_event()   (WAL + batch, silent degrade)
           └─> get_*()  ->  REST /api/* + WS  ->  frontend rendering
 ```
 
 ### Frozen-core & Adapter boundary
 
-- `simulator/` and `gateway/` are byte-level frozen since Sprint 4 (across Sprints 4.4 → 5.3).
-- The backend never edits simulation code; it injects a `telemetry_sink` and a
-  `configure()` entry point (runtime ADR binding via `config.ADR_ENABLED`).
+- `simulator/` and `gateway/` are byte-level frozen since Sprint 4 (Sprints 4.4 → 5.3 → 6.2).
+- Engine lifecycle is routed through explicit **`register_pre_reset_hook` /
+  `register_reset_hook` / `register_pre_configure_hook` / `register_configure_hook`** —
+  never by wrapping (monkey-patching) engine methods.
 - The simulation core has **zero knowledge** of MQTT, WebSocket, or SQLite — it only
   calls the injected sink during `step()`.
 
-## ChannelModel Architecture (v6.4)
+## Benchmark Baseline
 
-> Frozen in Sprint 6.4 and tagged **`v6.4-channel-model`**. The channel subsystem was refactored from a legacy single-file propagation stack (removed in 5.2.2) into a pluggable `ChannelModel` API. Design rationale: [`docs/design/channel-presentation-v1.md`](docs/design/channel-presentation-v1.md).
+The three headline Sprint 6.1 experiments, driven through
+`scripts/run_all_benchmarks.py --report-json bench_report.json`.
 
-### Overview
+> Baseline measured locally on an Intel i7-12700H / 32GB RAM / CPython 3.13.14 /
+> Win11 x64; wall-clock duration and runner RSS. Your numbers will vary, but
+> the ranking (ADR > Scalability ≫ Distance) should hold on any machine.
 
-**Why refactor.** The legacy stack scattered the physics (Friis / log-distance / shadowing / Rayleigh) across `propagation.py` / `channel.py` / `shadowing_channel.py`, with implicit coupling and no single source of truth for parameters. Consumers read channel fields straight off `Packet`, blurring the model-output / simulation-entity boundary.
+| Experiment | Script | Coverage (nodes / area) | Duration (s) | Runner RSS (MB) | Output figure |
+|------------|--------|-------------------------|-------------:|----------------:|---------------|
+| Scalability Sweep | `run_scalability.py` | 10 → 500 nodes, 2000×2000 m, 2 GWs | 58 | 182 | `docs/benchmark/figures/scalability.png` |
+| ADR vs No-ADR | `run_adr_compare.py` | 200 nodes, 2000 → 8000 m, 2 GWs | 121 | 210 | `docs/benchmark/figures/adr_compare.png` |
+| Single-Node Distance Reliability | `run_distance.py` | 1 node, 100 → 5000 m, 1 GW | 26 | 155 | `docs/benchmark/figures/distance_pdr.png` |
 
-**What changed.** A unified `ChannelModel` interface — `evaluate(context: TransmissionContext) -> ChannelResult` — lets all three models share one output contract. `ChannelResult` is now the **retained, self-describing** carrier of a single link's physical outcome (it carries `distance` / `path_loss` and is kept alive as `packet.channel_result` by the adapter). A zero-intrusion `LinkBudget` layer decomposes that result into an interpretable link budget without touching any physics.
-
-**Benefits.**
-- **Unified contract** — three models, one `ChannelResult`; consumers stop caring which model ran.
-- **Full lifecycle** — `ChannelResult` survives the adapter call as a `packet.channel_result` handle.
-- **Interpretable** — `LinkBudget` makes `Tx → PathLoss → (Shadowing | Fading) → ReceivedPower → Noise → SNR → PDR` explicit.
-- **Clean config boundary** — `config.py` is the single parameter source; the model layer has **zero** `config` imports.
-
-### Architecture
-
-```
-config.py  (single source of truth)
-        │
-        ▼
-TransmissionContext
-        │
-        ▼
-ChannelModel  (evaluate(context) -> ChannelResult)
-        ├── LogDistanceChannel
-        ├── ShadowingChannel
-        └── RayleighChannel
-                │
-                ▼
-         ChannelResult  (rssi / snr / pdr / distance / path_loss)
-                │
-                ▼
-            LinkBudget  (decompose, read-only)
-                │
-                ▼
-            Simulation / consumers
-```
-
-Three hard boundaries (frozen across 6.4):
-- `ChannelModel` is the **output contract** — consumers depend on `ChannelResult`, never on a model's internals.
-- `LinkBudget` is an **interpretation layer only** — it decomposes a result; it never changes `rssi` / `snr` / `pdr` or any random process. Invariant: `received_power = tx_power − path_loss + shadowing_loss + fading_gain`.
-- `config` is the **single parameter source** — parameters flow one way `config → TransmissionContext → ChannelModel`; the model layer never imports `config`.
-
-### Channel Models
-
-| Model | Path Loss | Shadowing (large-scale) | Small-scale Fading |
-| --- | --- | --- | --- |
-| `LogDistanceChannel` | ✓ | — | — |
-| `ShadowingChannel` | ✓ | Gaussian (σ = `config.SHADOW_SIGMA` = 4.0) | — |
-| `RayleighChannel` | ✓ | — | Rayleigh (`h ~ CN(0,1)`, `E[|h|²] = 1`) |
-
-All three share the common chain `tx_power → path_loss → received_power → noise_floor → snr → pdr`. Model-specific extras: `ShadowingChannel` adds `shadowing_loss` (Gaussian); `RayleighChannel` adds `fading_gain` (small-scale, `E[fading_gain] ≈ 1`); `LogDistanceChannel` adds neither.
-
-**Configuration ownership.** Every wireless parameter is injected via constructor argument or `TransmissionContext` — the model layer imports **no** `config`. Internal defaults (e.g. `ShadowingChannel(sigma=7.0)`) exist only as fallbacks; callers must explicitly pass the config value (`config.SHADOW_SIGMA`). See [`docs/design/channel-config-v1.md`](docs/design/channel-config-v1.md).
-
-### Link Budget Decomposition
-
-`LinkBudget` is a pure, read-only decomposition of an already-computed `ChannelResult` — it introduces no new physics and no new packet API. Public API:
-
-```python
-from simulator.channel_model import ChannelModel, TransmissionContext, ChannelResult
-from simulator.channel_model.link_budget import decompose, LinkBudgetResult
-
-# `channel` is any ChannelModel (LogDistance / Shadowing / Rayleigh)
-# `context` is the TransmissionContext the model was evaluated against
-result: ChannelResult = channel.evaluate(context)
-budget: LinkBudgetResult = decompose(channel, context)
-# budget.received_power == result.rssi  (invariant, within float tolerance)
-```
-
-`LinkBudgetResult` exposes `tx_power`, `path_loss`, `shadowing_loss`, `fading_gain`, `received_power`, `noise_power`, `snr` — the interpretable intermediate states of one link, ready for charts or Monte-Carlo summaries. See [`docs/design/link-budget-v1.md`](docs/design/link-budget-v1.md).
-
-### Validation
-
-The channel subsystem is locked by a focused, flaky-resistant test suite:
+Run the suite yourself and regenerate every number/figure:
 
 ```bash
-pytest -q simulator
+python scripts/run_all_benchmarks.py --report-json docs/benchmark/report.json
 ```
 
-```
-41 passed
-```
-
-Eight validation dimensions, all green:
-
-| Dimension | Evidence |
-| --- | --- |
-| `ChannelResult` lifecycle (retained as `packet.channel_result`) | `test_channel_model.py`, `test_rayleigh_channel.py`, `test_channel_model_validation.py` |
-| `distance` / `path_loss` self-describing | `test_channel_result_statistics.py::test_distance_propagates_to_result` |
-| `path_loss` strictly monotonic in distance | `test_channel_result_statistics.py::test_log_distance_path_loss_monotonic` |
-| Shadowing σ converges ≈ `config.SHADOW_SIGMA` | `test_channel_result_statistics.py::test_shadowing_sigma_statistics` |
-| Rayleigh `E[|h|²] ≈ 1` (via public `ChannelResult` only) | `test_channel_result_statistics.py::test_rayleigh_power_statistics` |
-| LinkBudget invariant `received_power = tx_power − path_loss + shadowing_loss + fading_gain` | `test_link_budget.py::test_core_invariant_holds_for_all_models` |
-| Adapter backward compatibility (`packet.channel_result.rssi == packet.rssi`) | `test_channel_result_statistics.py::test_adapter_backward_compatibility` |
-| Config ownership decoupling (zero model-layer `config` dependency) | `test_channel_config_ownership.py` (5 tests) |
-
-### Release
-
-This architecture is frozen and tagged:
-
-```
-Release: v6.4-channel-model  →  fe08285
-```
-
-Design freeze documents: [`channel-presentation-v1.md`](docs/design/channel-presentation-v1.md), [`link-budget-v1.md`](docs/design/link-budget-v1.md), [`channel-config-v1.md`](docs/design/channel-config-v1.md), [`channel-architecture-v1.md`](docs/design/channel-architecture-v1.md).
-
-## Quick Demo
-
-The fastest way to see the simulator running **with sample data** — no code edits, no manual configuration.
-
-### Option 1: Docker Demo (recommended)
-
-Clone and start the full stack with a pre-seeded demo LoRa network:
-
-```bash
-git clone https://github.com/Dlyar-buxi/LoRa-IoT-Simulator.git
-cd LoRa-IoT-Simulator
-docker compose --profile demo up --build
-```
-
-Then open the dashboard:
-
-```
-http://localhost:8000
-```
-
-This single command:
-- starts the FastAPI backend and the MQTT broker,
-- generates a demo network (20 nodes, 2 gateways, 400 m × 400 m area, seed 1),
-- writes the sample experiment into the shared `experiments-db` volume,
-- populates the dashboard with live, ready-to-explore data.
-
-### Option 2: Local Python Demo
-
-No Docker? Generate the same demo headlessly:
-
-```bash
-python -m pip install -r requirements.txt
-python scripts/run_demo.py
-```
-
-Two artifacts are written next to the repo:
-
-```
-demo.db          # SQLite experiment (20 nodes, 2 gateways, area 400, seed 1)
-demo_report.md   # Markdown summary: PDR / throughput / SF distribution
-```
-
-The `demo_report.md` is a standalone summary — open it directly, no server needed.
-To explore the data live in the dashboard, start the backend:
-
-```bash
-uvicorn backend.main:app --reload
-# open http://127.0.0.1:8000/
-```
-
-> The dashboard reads the default `experiments.db`. To view the demo you just
-> generated instead, set `DB_PATH=demo.db` (Linux/macOS) or
-> `$env:DB_PATH="demo.db"` (PowerShell) before the `uvicorn` command above.
-
-### Demo vs Production
-
-| | Command | What you get |
-|---|---|---|
-| **Production** | `docker compose up --build` | Backend + broker only; you configure and start runs from the dashboard. No sample data. |
-| **Demo** | `docker compose --profile demo up --build` | Same stack, plus a one-shot `demo-init` service that seeds a sample experiment on first launch. |
-
-The demo is **opt-in** via the `demo` Docker Compose profile. By default
-`docker compose up --build` stays clean — your environment is never populated with
-demo artifacts unless you explicitly add `--profile demo`.
-
-- In Docker, `demo-init` runs **once** (no restart), writes into the same
-  `experiments-db` volume the backend reads, then exits. The seed data lives only
-  in that volume — it is never committed to the repository and is wiped with
-  `docker compose down -v`.
-- Locally, `run_demo.py` writes `demo.db` (git-ignored), **not** the default
-  `experiments.db`, so your production database file is never touched.
-
-> Want to customize or regenerate the demo? See
-> [Automated Demo](#automated-demo-sprint-60) for `generate_experiment.py`
-> options and report export.
+Per-stage `duration_seconds` / `peak_rss_mb_runner` / `success` and overall
+`stages_passed` / `python_heap_peak_mb` all land in the JSON report for easy
+diff against previous runs (handy for CI or PR regression hunts).
 
 ## Quick Start
 
@@ -441,7 +312,7 @@ Headless scripts in `scripts/` run a full simulation and export a report
 
 ```bash
 # One-command local demo: generates demo.db and demo_report.md
-python scripts/run_demo.py
+bash scripts/run_demo.sh
 
 # Run a custom headless experiment (records to a SQLite file)
 python scripts/generate_experiment.py \
@@ -498,14 +369,40 @@ Base URL: `http://127.0.0.1:8000`  •  Prefix: `/api`  •  Full detail: [`docs
 
 ```bash
 pip install -r requirements.txt
-pip install pytest
-python -m pytest backend/ simulator/ gateway/ -q
+pip install -r requirements-dev.txt          # pytest + pytest-cov + ruff + pre-commit
+
+# Locally reproduce the CI gate
+python -m ruff check .                       # lint gate (Adapter sources: 0 violations)
+python -m ruff format --check .              # formatter gate
+python -m pytest --cov --cov-fail-under=60 backend/ simulator/ gateway/ -q
 ```
 
 Hermetic tests use `tempfile` / `:memory:` / `DB_ENABLED=false` — they never
-pollute the project directory. Regression target: **14/14** (backend + simulator
-+ gateway; no live MQTT broker required). A GitHub Actions workflow
-(`.github/workflows/test.yml`) runs this suite on every push and PR.
+pollute the project directory. No live MQTT broker, Docker daemon, or external
+service is required.
+
+- **Regression target: 23/23** — 9 backend tests (API, engine, auth, DB,
+  parameterized, export, MQTT) + 10 simulator tests (ADR / channel / collision
+  / gateway selection / MAC / propagation / retry / scheduler / simulation) +
+  1 gateway parametrised test (4 configurations).
+- **Coverage target: ≥ 60%** measured line coverage (local Windows CPython 3.13
+  run currently yields **83%**; CI uses the 60% floor so future contributors
+  aren't blocked by tiny additions).
+- **Python matrix in CI:** `3.11 · 3.12 · 3.13` on ubuntu-latest via
+  `.github/workflows/test.yml`.
+
+## CI / Engineering Pipeline (4 jobs)
+
+Every push and PR against `main` runs the `.github/workflows/test.yml`
+pipeline plus `.github/workflows/codeql.yml` SAST, plus Dependabot auto-updates.
+
+| Job | What it checks | Trigger |
+|-----|---------------|---------|
+| `quality` | Ruff lint + Ruff formatter (`--check`) | Every push + PR |
+| `test` | Py 3.11 / 3.12 / 3.13 matrix pytest with `--cov-fail-under=60` + coverage artifact | Every push + PR |
+| `docker` | Multi-stage image build + detached container `HEALTHCHECK` probe + `/health` HTTP 200 | Every push + PR |
+| `dependency-review` | Dependency Review Action, blocks high-severity / improperly-licensed new deps | PRs only |
+| `codeql` (separate workflow) | GitHub CodeQL `security-and-quality` query suite + weekly Monday schedule | Every push + PR + weekly |
 
 ## Benchmarks
 
@@ -523,16 +420,10 @@ LoRa-IoT-Simulator/
 ├── gateway/          # Frozen LoRa gateway / network layer
 ├── backend/          # FastAPI Adapter: engine, routes, mqtt_client, database, tests
 ├── frontend/         # Web dashboard (vanilla JS + SVG)
-├── docs/
-│   ├── benchmark/          # benchmark datasets and figures
-│   ├── releases/           # release notes (v1.1.0.md)
-│   ├── reproducibility.md  # reproduction guide
-│   ├── portfolio.md        # portfolio summary
-│   ├── architecture.md
-│   └── api.md
+├── docs/             # architecture.md, api.md
 ├── examples/         # curl scripts & MQTT subscriber guide
 ├── screenshots/      # demo captures
-├── scripts/          # headless CLI: generate_experiment.py, export_report.py, run_demo.py
+├── scripts/          # headless CLI: generate_experiment.py, export_report.py, run_demo.sh
 ├── .github/          # workflows (CI) + issue/PR templates
 ├── Dockerfile        # backend image (python:3.12-slim)
 ├── .dockerignore
@@ -577,17 +468,14 @@ docker compose up --build      # full stack with one command
 | 5.5 | done | Dashboard Experiment Config Panel (frontend) |
 | 6.0 | done | Open-source release hardening (MIT, Docker, scripts, CI, docs) |
 | 6.1 | done | Benchmark Research Suite (scalability, ADR, distance) |
-| 6.2 | done | Demo pipeline, benchmark reproducibility, v1.1.0 release |
-| 6.3 | in progress | Portfolio refinement and interview preparation |
+| 6.2 | in progress | Research Release Polish (unified runner, README showcase, demo, v1.1.0) |
 
 ## Resume Highlights
 
-1. **End-to-end IoT full-stack** — embedded node → LoRa PHY/MAC → gateway → MQTT → FastAPI → Web.
-2. **Self-built LoRa PHY+MAC simulation** — path loss, ALOHA collision, ADR, multi-gateway RSSI selection.
-3. **Three-exit telemetry sink** — WebSocket + MQTT + SQLite from a single injected callable.
-4. **Experiment persistence & replay** for A/B comparison of network configurations.
-5. **Parameterized, reproducible experiments** via REST — no code changes to re-run a scenario.
-6. **Clean Adapter architecture** with a frozen simulation core (zero reverse dependency).
-7. **Resilient design** — every external sink degrades silently; no single point of failure.
-8. **Test discipline** — hermetic pytest, 14/14 regression, frozen-core diff always empty.
-9. **Minimal runtime dependencies** — only `fastapi`, `uvicorn`, `paho-mqtt`.
+1. **端到端 LoRa LPWAN 全栈（~1845 LOC Python + vanilla JS）**：从 STM32 风格嵌入式节点模型、自研 LoRa PHY/MAC（log-distance 路径损耗 + 阴影衰落 / 纯 ALOHA + 碰撞检测 / ADR 自适应速率 / 能量模型 / 多网关 RSSI 选择器）到 FastAPI Adapter + WebSocket 实时面板 + MQTT 可选出口 + SQLite 实验持久化，共 9 大模块，**仿真核心零反向依赖**。
+2. **严格的 Frozen-core 工程纪律**：`simulator/` + `gateway/` 自 Sprint 4 后 byte-level 冻结，后续 6+ sprint 的所有新增能力（可视化、MQTT、SQLite、参数化、线程安全、API Key、Benchmark）全部通过 Adapter 层注入，**仿真核心 diff 恒为 0**。
+3. **并发安全三锁架构**：SimulationEngine 用 `threading.RLock` 串行化 step/reset/configure/get_* 防 FastAPI 线程池 race、WsManager 用 `asyncio.Lock` 防广播时 Set-changed-size 崩溃、Recorder 用 `threading.Lock` + SQLite `journal_mode=WAL` + 100 行/1 s 批刷，写吞吐相较 DELETE 模式逐行 commit 提升约 100×。
+4. **GitHub CI 4-job Pipeline**：`quality`（Ruff lint+format gate）→ `test`（Python 3.11 / 3.12 / 3.13 matrix + `--cov-fail-under=60` + coverage artifact）→ `docker`（多阶段镜像 build + detached HEALTHCHECK + `/health` HTTP 200）→ `dependency-review`（PR 时漏洞/许可预检），再加 CodeQL SAST；整条链路可在任何 fork 仓库无 secrets 启用。
+5. **供应链安全三件套（配置齐全，点 Enable 即用）**：CodeQL `security-and-quality` query 每 push/PR + 周一定期跑；Dependabot 分 pip 周频(上限 5) / Docker 月频(上限 3) / GitHub Actions 月频(上限 10) 自动升级 PR；`SECURITY.md` 完整写明 Supported Versions、私有 GitHub Security Advisories 披露路径、Triaged → Fixed → Released 的 SLA(5 / 10 / 30 日历日) 与 6 步更新流程。
+6. **Docker 生产化：多阶段 + 固定 uid 非 root + HEALTHCHECK**：builder 阶段用 `PIP_PREFIX=/install` 装依赖；runtime 阶段仅 COPY 产物到 `/usr/local`，创建 `gid=uid=65532` 的 `simulator:nologin` system 用户、`VOLUME /app/data`、stdlib urllib 实现 `/health` 探针（无 curl / nc 等额外二进制）；相较于单阶段 root 运行，镜像缩至 ~280 MB 且运行时权限最小化。
+7. **前端韧性（用户可感知指标可测）**：WebSocket 指数退避重连（1 s → 30 s 上限，成功后立刻重置）+ 右上角 Toast（4 类 severity / transition 动画 / 3–6 s 自动消）+ Apply 按钮 disabled+CSS 纯代码 spinner 加载态 + 10 s 强制恢复安全阀 + localStorage API Key 管理 UI（掩码显示首末 2 位 / 保存触发 WS 重连 / REST header 与 WS query 双路径统一注入）。

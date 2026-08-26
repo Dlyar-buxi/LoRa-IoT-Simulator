@@ -23,8 +23,10 @@ def main():
     assert st["received"] == 0, f"received should be 0, got {st['received']}"
     assert st["state"] == "ready", f"state should be ready, got {st['state']}"
     assert st["time"] == 0.0, f"time should be 0, got {st['time']}"
-    print(f"[1] build (no auto-run): pending={st['pending']} "
-          f"received={st['received']} state={st['state']} time={st['time']}")
+    print(
+        f"[1] build (no auto-run): pending={st['pending']} "
+        f"received={st['received']} state={st['state']} time={st['time']}"
+    )
 
     # 2) start -> running（Pull 模型：仅切状态）
     eng.start()
@@ -38,9 +40,11 @@ def main():
     assert executed == 10, f"step(10) should execute 10, got {executed}"
     assert after["time"] > before["time"], "time should advance after step"
     assert after["received"] >= before["received"], "received should not decrease"
-    print(f"[3] step(10): executed={executed} time={after['time']} "
-          f"received={after['received']} pending={after['pending']} "
-          f"state={after['state']}")
+    print(
+        f"[3] step(10): executed={executed} time={after['time']} "
+        f"received={after['received']} pending={after['pending']} "
+        f"state={after['state']}"
+    )
 
     # 4) 持续推进至结束 -> finished, pending=0, received=200
     total = 10
@@ -50,8 +54,10 @@ def main():
     assert fin["state"] == "finished", f"state should be finished, got {fin['state']}"
     assert fin["pending"] == 0, f"pending should be 0, got {fin['pending']}"
     assert fin["received"] == 200, f"received should be 200, got {fin['received']}"
-    print(f"[4] drain: total_events={total} received={fin['received']} "
-          f"pending={fin['pending']} state={fin['state']}")
+    print(
+        f"[4] drain: total_events={total} received={fin['received']} "
+        f"pending={fin['pending']} state={fin['state']}"
+    )
 
     # 5) reset 回到初始：ready / received=0 / pending=200 / time=0
     eng.reset()
@@ -60,8 +66,10 @@ def main():
     assert rs["received"] == 0, f"received should be 0, got {rs['received']}"
     assert rs["pending"] == 200, f"pending should be 200, got {rs['pending']}"
     assert rs["time"] == 0.0, f"time should be 0, got {rs['time']}"
-    print(f"[5] reset: state={rs['state']} received={rs['received']} "
-          f"pending={rs['pending']} time={rs['time']}")
+    print(
+        f"[5] reset: state={rs['state']} received={rs['received']} "
+        f"pending={rs['pending']} time={rs['time']}"
+    )
 
     # 6) pause / resume 语义
     eng.start()
@@ -78,8 +86,7 @@ def main():
     stp = eng.get_status()
     assert stp["state"] == "finished", f"state should be finished, got {stp['state']}"
     assert stp["received"] == before_stop, (
-        f"stop should preserve received, got {stp['received']} "
-        f"(before={before_stop})"
+        f"stop should preserve received, got {stp['received']} (before={before_stop})"
     )
     print(f"[7] stop: state={stp['state']} (received preserved={stp['received']})")
 

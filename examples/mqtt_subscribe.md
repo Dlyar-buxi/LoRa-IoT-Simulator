@@ -44,14 +44,19 @@ You will see one JSON line per simulation event as the engine steps:
 import json
 from paho.mqtt import client as mqtt
 
+
 def on_connect(c, u, f, rc, *a):
     print("connected, rc =", rc)
     c.subscribe("lora/device/data")
 
+
 def on_message(c, u, msg):
     rec = json.loads(msg.payload)
-    print(f"node={rec['node']} sf={rec['sf']} "
-          f"rssi={rec['rssi']} gw={rec['gateway']} ok={rec['success']}")
+    print(
+        f"node={rec['node']} sf={rec['sf']} "
+        f"rssi={rec['rssi']} gw={rec['gateway']} ok={rec['success']}"
+    )
+
 
 c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="lora-subscriber")
 c.on_connect = on_connect

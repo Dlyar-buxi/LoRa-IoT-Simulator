@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lora-iot-simulator"
+version = "1.2.0-hardening"
+description = "Full-stack LoRa LPWAN network simulation & monitoring platform (frozen PHY/MAC/ADR core + FastAPI adapter + WebSocket dashboard)."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "Dlyar" }]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications",
+    "Topic :: Scientific/Engineering :: Interface Engine/Protocol Translator",
+    "Typing :: Typed",
+]
+dependencies = [
+    "fastapi==0.111.0",
+    "uvicorn[standard]==0.30.1",
+    "python-multipart==0.0.9",
+    "paho-mqtt==2.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Dlyar-buxi/LoRa-IoT-Simulator"
+Repository = "https://github.com/Dlyar-buxi/LoRa-IoT-Simulator.git"
+"Issue tracker" = "https://github.com/Dlyar-buxi/LoRa-IoT-Simulator/issues"
+
+[project.scripts]
+# Note: the primary entry point is still `uvicorn backend.main:app`.
+# These scripts mirror the `scripts/` directory so `pip install -e .` exposes them.
+lora-generate = "scripts.generate_experiment:main"
+lora-export-report = "scripts.export_report:main"
+lora-run-benchmarks = "scripts.run_all_benchmarks:main"
+
+# ----------------------------------------------------------------------------
+# ruff: extremely fast Python linter + formatter, replaces flake8 + isort + black
+# ----------------------------------------------------------------------------
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# E501 line too long — keep it permissive because frozen-core lines exist
+ignore = ["E501"]
+# Aggressively upgrade typing syntax etc. on py312 target
+unfixable = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["backend", "simulator", "gateway"]
+known-third-party = ["fastapi", "paho", "starlette", "uvicorn", "websockets"]
+case-sensitive = true
+
+[tool.ruff.lint.per-file-ignores]
+# Frozen core (simulator/ + gateway/) must NOT be touched for algorithmic changes.
+# Silence the most common code-style findings so `ruff check .` stays green
+# without requiring behavior edits.
+"simulator/*" = ["F401", "F841", "E402", "F722", "B008"]
+"gateway/*"   = ["F401", "F841", "E402"]
+# Test files often import fixtures transitively and accept some unused locals.
+"backend/test_*.py" = ["F841"]
+"simulator/test_*.py" = ["F841"]
+"gateway/test_*.py" = ["F841"]
+"scripts/**/*.py" = ["F401", "F841"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+# line-length is inherited from [tool.ruff] (88).
+skip-magic-trailing-comma = false
+
+# ----------------------------------------------------------------------------
+# pytest: default behaviour for the 23/23 regression suite.
+# ----------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["backend", "simulator", "gateway"]
+pythonpath = ["."]
+addopts = "--strict-markers -q"
+# marker list — future extensibility for @pytest.mark.slow / @pytest.mark.integration
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests requiring live services (broker, DB server)",
+]
