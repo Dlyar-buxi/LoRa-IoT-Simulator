@@ -30,7 +30,8 @@ from .engine import engine
 from .mqtt_client import mqtt
 from .database import recorder
 from .routes import router
-from .auth import register_auth  # P1-6: 可选 API Key 认证（env 未设置时零开销）
+# P1-6: 可选 API Key 认证（env 未设置时零开销，TestClient 兼容）
+from .auth import register_auth, enforce_ws_token
 
 logging.basicConfig(level=logging.INFO)
 
@@ -198,8 +199,27 @@ app.include_router(router)
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
-    """实时遥测通道：连接后接收每条 device/data 记录（JSON 文本）。"""
+    """实时遥测通道：连接后接收每条 device/data 记录（JSON 文本）。
+
+    P1-6: 如果 env API_KEY 已设置，要求握手 URL 带 ?token=<key>。
+    校验失败：在 accept 之前用 HTTP 401 直接拒绝（通过 raw ASGI
+    scope/receive/send 调用 JSONResponse，保证不是 WS close frame 而是
+    真正的 HTTP 响应，和 REST 行为一致）。
+    """
     ws_manager.attach_loop(asyncio.get_running_loop())
+
+    # P1-6: 可选 WS token 校验。env 未启用时 enforce_ws_token 返回 None。
+    unauth_resp = enforce_ws_token(websocket.scope)
+    if unauth_resp is not None:
+        # WebSocket 对象未 accept 时仍持有原始 ASGI receive/send。
+        # 直接喂给 JSONResponse.__call__，它会写一个标准的 401 HTTP 响应
+        # （含 body）然后结束请求生命周期，客户端会收到 "401 Unauthorized"
+        # 而不是 "101 Switching Protocols"。
+        raw_receive = websocket._receive
+        raw_send = websocket._send
+        await unauth_resp(websocket.scope, raw_receive, raw_send)
+        return
+
     await ws_manager.connect(websocket)
     try:
         # 保持连接；客户端可发任意文本作心跳，这里仅接收并忽略
