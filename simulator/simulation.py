@@ -13,7 +13,7 @@ import random
 
 from simulator import config
 from simulator.scheduler import Scheduler
-from simulator.channel_model import ChannelModelLinkAdapter, LogDistanceChannel
+from simulator.channel import LoRaChannel
 from simulator.collision import CollisionDetector
 from simulator.node import SensorNode
 from simulator.mac import LoRaMAC, MacState
@@ -28,15 +28,7 @@ class Simulation:
         self.duration = duration
 
         self.scheduler = Scheduler()
-        # Channel Model v0.1: 用适配器把新 ChannelModel 接入既有调用点
-        self.channel = ChannelModelLinkAdapter(
-            LogDistanceChannel(
-                path_loss_exponent=config.PATH_LOSS_EXPONENT,
-                noise_floor=config.NOISE_FLOOR,
-                frequency=config.FREQUENCY,
-            ),
-            environment=config.ENVIRONMENT,
-        )
+        self.channel = LoRaChannel()
         self.collision_detector = CollisionDetector()
         self.active_packets = []
 

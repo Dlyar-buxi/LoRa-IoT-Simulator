@@ -137,191 +137,6 @@ simulator/simulation.py
 - The simulation core has **zero knowledge** of MQTT, WebSocket, or SQLite — it only
   calls the injected sink during `step()`.
 
-## ChannelModel Architecture (v6.4)
-
-> Frozen in Sprint 6.4 and tagged **`v6.4-channel-model`**. The channel subsystem was refactored from a legacy single-file propagation stack (removed in 5.2.2) into a pluggable `ChannelModel` API. Design rationale: [`docs/design/channel-presentation-v1.md`](docs/design/channel-presentation-v1.md).
-
-### Overview
-
-**Why refactor.** The legacy stack scattered the physics (Friis / log-distance / shadowing / Rayleigh) across `propagation.py` / `channel.py` / `shadowing_channel.py`, with implicit coupling and no single source of truth for parameters. Consumers read channel fields straight off `Packet`, blurring the model-output / simulation-entity boundary.
-
-**What changed.** A unified `ChannelModel` interface — `evaluate(context: TransmissionContext) -> ChannelResult` — lets all three models share one output contract. `ChannelResult` is now the **retained, self-describing** carrier of a single link's physical outcome (it carries `distance` / `path_loss` and is kept alive as `packet.channel_result` by the adapter). A zero-intrusion `LinkBudget` layer decomposes that result into an interpretable link budget without touching any physics.
-
-**Benefits.**
-- **Unified contract** — three models, one `ChannelResult`; consumers stop caring which model ran.
-- **Full lifecycle** — `ChannelResult` survives the adapter call as a `packet.channel_result` handle.
-- **Interpretable** — `LinkBudget` makes `Tx → PathLoss → (Shadowing | Fading) → ReceivedPower → Noise → SNR → PDR` explicit.
-- **Clean config boundary** — `config.py` is the single parameter source; the model layer has **zero** `config` imports.
-
-### Architecture
-
-```
-config.py  (single source of truth)
-        │
-        ▼
-TransmissionContext
-        │
-        ▼
-ChannelModel  (evaluate(context) -> ChannelResult)
-        ├── LogDistanceChannel
-        ├── ShadowingChannel
-        └── RayleighChannel
-                │
-                ▼
-         ChannelResult  (rssi / snr / pdr / distance / path_loss)
-                │
-                ▼
-            LinkBudget  (decompose, read-only)
-                │
-                ▼
-            Simulation / consumers
-```
-
-Three hard boundaries (frozen across 6.4):
-- `ChannelModel` is the **output contract** — consumers depend on `ChannelResult`, never on a model's internals.
-- `LinkBudget` is an **interpretation layer only** — it decomposes a result; it never changes `rssi` / `snr` / `pdr` or any random process. Invariant: `received_power = tx_power − path_loss + shadowing_loss + fading_gain`.
-- `config` is the **single parameter source** — parameters flow one way `config → TransmissionContext → ChannelModel`; the model layer never imports `config`.
-
-### Channel Models
-
-| Model | Path Loss | Shadowing (large-scale) | Small-scale Fading |
-| --- | --- | --- | --- |
-| `LogDistanceChannel` | ✓ | — | — |
-| `ShadowingChannel` | ✓ | Gaussian (σ = `config.SHADOW_SIGMA` = 4.0) | — |
-| `RayleighChannel` | ✓ | — | Rayleigh (`h ~ CN(0,1)`, `E[|h|²] = 1`) |
-
-All three share the common chain `tx_power → path_loss → received_power → noise_floor → snr → pdr`. Model-specific extras: `ShadowingChannel` adds `shadowing_loss` (Gaussian); `RayleighChannel` adds `fading_gain` (small-scale, `E[fading_gain] ≈ 1`); `LogDistanceChannel` adds neither.
-
-**Configuration ownership.** Every wireless parameter is injected via constructor argument or `TransmissionContext` — the model layer imports **no** `config`. Internal defaults (e.g. `ShadowingChannel(sigma=7.0)`) exist only as fallbacks; callers must explicitly pass the config value (`config.SHADOW_SIGMA`). See [`docs/design/channel-config-v1.md`](docs/design/channel-config-v1.md).
-
-### Link Budget Decomposition
-
-`LinkBudget` is a pure, read-only decomposition of an already-computed `ChannelResult` — it introduces no new physics and no new packet API. Public API:
-
-```python
-from simulator.channel_model import ChannelModel, TransmissionContext, ChannelResult
-from simulator.channel_model.link_budget import decompose, LinkBudgetResult
-
-# `channel` is any ChannelModel (LogDistance / Shadowing / Rayleigh)
-# `context` is the TransmissionContext the model was evaluated against
-result: ChannelResult = channel.evaluate(context)
-budget: LinkBudgetResult = decompose(channel, context)
-# budget.received_power == result.rssi  (invariant, within float tolerance)
-```
-
-`LinkBudgetResult` exposes `tx_power`, `path_loss`, `shadowing_loss`, `fading_gain`, `received_power`, `noise_power`, `snr` — the interpretable intermediate states of one link, ready for charts or Monte-Carlo summaries. See [`docs/design/link-budget-v1.md`](docs/design/link-budget-v1.md).
-
-### Validation
-
-The channel subsystem is locked by a focused, flaky-resistant test suite:
-
-```bash
-pytest -q simulator
-```
-
-```
-41 passed
-```
-
-Eight validation dimensions, all green:
-
-| Dimension | Evidence |
-| --- | --- |
-| `ChannelResult` lifecycle (retained as `packet.channel_result`) | `test_channel_model.py`, `test_rayleigh_channel.py`, `test_channel_model_validation.py` |
-| `distance` / `path_loss` self-describing | `test_channel_result_statistics.py::test_distance_propagates_to_result` |
-| `path_loss` strictly monotonic in distance | `test_channel_result_statistics.py::test_log_distance_path_loss_monotonic` |
-| Shadowing σ converges ≈ `config.SHADOW_SIGMA` | `test_channel_result_statistics.py::test_shadowing_sigma_statistics` |
-| Rayleigh `E[|h|²] ≈ 1` (via public `ChannelResult` only) | `test_channel_result_statistics.py::test_rayleigh_power_statistics` |
-| LinkBudget invariant `received_power = tx_power − path_loss + shadowing_loss + fading_gain` | `test_link_budget.py::test_core_invariant_holds_for_all_models` |
-| Adapter backward compatibility (`packet.channel_result.rssi == packet.rssi`) | `test_channel_result_statistics.py::test_adapter_backward_compatibility` |
-| Config ownership decoupling (zero model-layer `config` dependency) | `test_channel_config_ownership.py` (5 tests) |
-
-### Release
-
-This architecture is frozen and tagged:
-
-```
-Release: v6.4-channel-model  →  fe08285
-```
-
-Design freeze documents: [`channel-presentation-v1.md`](docs/design/channel-presentation-v1.md), [`link-budget-v1.md`](docs/design/link-budget-v1.md), [`channel-config-v1.md`](docs/design/channel-config-v1.md), [`channel-architecture-v1.md`](docs/design/channel-architecture-v1.md).
-
-## Quick Demo
-
-The fastest way to see the simulator running **with sample data** — no code edits, no manual configuration.
-
-### Option 1: Docker Demo (recommended)
-
-Clone and start the full stack with a pre-seeded demo LoRa network:
-
-```bash
-git clone https://github.com/Dlyar-buxi/LoRa-IoT-Simulator.git
-cd LoRa-IoT-Simulator
-docker compose --profile demo up --build
-```
-
-Then open the dashboard:
-
-```
-http://localhost:8000
-```
-
-This single command:
-- starts the FastAPI backend and the MQTT broker,
-- generates a demo network (20 nodes, 2 gateways, 400 m × 400 m area, seed 1),
-- writes the sample experiment into the shared `experiments-db` volume,
-- populates the dashboard with live, ready-to-explore data.
-
-### Option 2: Local Python Demo
-
-No Docker? Generate the same demo headlessly:
-
-```bash
-python -m pip install -r requirements.txt
-python scripts/run_demo.py
-```
-
-Two artifacts are written next to the repo:
-
-```
-demo.db          # SQLite experiment (20 nodes, 2 gateways, area 400, seed 1)
-demo_report.md   # Markdown summary: PDR / throughput / SF distribution
-```
-
-The `demo_report.md` is a standalone summary — open it directly, no server needed.
-To explore the data live in the dashboard, start the backend:
-
-```bash
-uvicorn backend.main:app --reload
-# open http://127.0.0.1:8000/
-```
-
-> The dashboard reads the default `experiments.db`. To view the demo you just
-> generated instead, set `DB_PATH=demo.db` (Linux/macOS) or
-> `$env:DB_PATH="demo.db"` (PowerShell) before the `uvicorn` command above.
-
-### Demo vs Production
-
-| | Command | What you get |
-|---|---|---|
-| **Production** | `docker compose up --build` | Backend + broker only; you configure and start runs from the dashboard. No sample data. |
-| **Demo** | `docker compose --profile demo up --build` | Same stack, plus a one-shot `demo-init` service that seeds a sample experiment on first launch. |
-
-The demo is **opt-in** via the `demo` Docker Compose profile. By default
-`docker compose up --build` stays clean — your environment is never populated with
-demo artifacts unless you explicitly add `--profile demo`.
-
-- In Docker, `demo-init` runs **once** (no restart), writes into the same
-  `experiments-db` volume the backend reads, then exits. The seed data lives only
-  in that volume — it is never committed to the repository and is wiped with
-  `docker compose down -v`.
-- Locally, `run_demo.py` writes `demo.db` (git-ignored), **not** the default
-  `experiments.db`, so your production database file is never touched.
-
-> Want to customize or regenerate the demo? See
-> [Automated Demo](#automated-demo-sprint-60) for `generate_experiment.py`
-> options and report export.
-
 ## Quick Start
 
 Requirements: Python 3.12+
@@ -441,7 +256,7 @@ Headless scripts in `scripts/` run a full simulation and export a report
 
 ```bash
 # One-command local demo: generates demo.db and demo_report.md
-python scripts/run_demo.py
+bash scripts/run_demo.sh
 
 # Run a custom headless experiment (records to a SQLite file)
 python scripts/generate_experiment.py \
@@ -523,16 +338,10 @@ LoRa-IoT-Simulator/
 ├── gateway/          # Frozen LoRa gateway / network layer
 ├── backend/          # FastAPI Adapter: engine, routes, mqtt_client, database, tests
 ├── frontend/         # Web dashboard (vanilla JS + SVG)
-├── docs/
-│   ├── benchmark/          # benchmark datasets and figures
-│   ├── releases/           # release notes (v1.1.0.md)
-│   ├── reproducibility.md  # reproduction guide
-│   ├── portfolio.md        # portfolio summary
-│   ├── architecture.md
-│   └── api.md
+├── docs/             # architecture.md, api.md
 ├── examples/         # curl scripts & MQTT subscriber guide
 ├── screenshots/      # demo captures
-├── scripts/          # headless CLI: generate_experiment.py, export_report.py, run_demo.py
+├── scripts/          # headless CLI: generate_experiment.py, export_report.py, run_demo.sh
 ├── .github/          # workflows (CI) + issue/PR templates
 ├── Dockerfile        # backend image (python:3.12-slim)
 ├── .dockerignore
@@ -577,8 +386,7 @@ docker compose up --build      # full stack with one command
 | 5.5 | done | Dashboard Experiment Config Panel (frontend) |
 | 6.0 | done | Open-source release hardening (MIT, Docker, scripts, CI, docs) |
 | 6.1 | done | Benchmark Research Suite (scalability, ADR, distance) |
-| 6.2 | done | Demo pipeline, benchmark reproducibility, v1.1.0 release |
-| 6.3 | in progress | Portfolio refinement and interview preparation |
+| 6.2 | in progress | Research Release Polish (unified runner, README showcase, demo, v1.1.0) |
 
 ## Resume Highlights
 
@@ -589,5 +397,5 @@ docker compose up --build      # full stack with one command
 5. **Parameterized, reproducible experiments** via REST — no code changes to re-run a scenario.
 6. **Clean Adapter architecture** with a frozen simulation core (zero reverse dependency).
 7. **Resilient design** — every external sink degrades silently; no single point of failure.
-8. **Test discipline** — hermetic pytest, 14/14 regression, frozen-core diff always empty.
+8. **Test discipline** — hermetic pytest, 12/12 regression, frozen-core diff always empty.
 9. **Minimal runtime dependencies** — only `fastapi`, `uvicorn`, `paho-mqtt`.

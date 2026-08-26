@@ -1,13 +1,5 @@
 """
 LoRa network simulation integration test
-
-注意: 本测试是「Channel Model 集成冒烟测试」, 验证
-ChannelModelLinkAdapter + LogDistanceChannel 能端到端驱动仿真
-(节点 -> 网关选择 -> 信道评估 -> 统计)。
-
-⚠️ 它不是性能指标基准: v0.1 无阴影衰落 / 瑞利 / collision 耦合,
-默认场景下 PDR 会饱和在 ~100%, 这只能说明适配器工作, 不代表信道质量好。
-解读 PDR 时务必结合 v0.1 的能力边界, 见 docs/design/channel-model-api.md。
 """
 
 import random
@@ -22,7 +14,7 @@ from gateway.gateway import Gateway
 from simulator.simulation import Simulation
 
 
-def test_simulation_channel_integration():
+def test_simulation():
     # 固定随机种子，保证可复现
     random.seed(SEED)
 
@@ -77,4 +69,4 @@ def test_simulation_channel_integration():
 
 
 if __name__ == "__main__":
-    test_simulation_channel_integration()
+    test_simulation()

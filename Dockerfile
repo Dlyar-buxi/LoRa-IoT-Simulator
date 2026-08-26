@@ -26,6 +26,8 @@ COPY simulator/ ./simulator/
 COPY gateway/   ./gateway/
 COPY backend/   ./backend/
 COPY frontend/  ./frontend/
+COPY examples/  ./examples/
+COPY docs/      ./docs/
 COPY scripts/   ./scripts/
 
 # Defaults; override via Compose env / .env.
