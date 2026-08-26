@@ -30,6 +30,7 @@ from .engine import engine
 from .mqtt_client import mqtt
 from .database import recorder
 from .routes import router
+from .auth import register_auth  # P1-6: 可选 API Key 认证（env 未设置时零开销）
 
 logging.basicConfig(level=logging.INFO)
 
@@ -188,6 +189,9 @@ app = FastAPI(
     version="5.3.0",
     lifespan=lifespan,
 )
+
+# P1-6: 注册可选 API Key 认证。env 未设置 API_KEY 时内部短路，零行为变化。
+register_auth(app)
 
 app.include_router(router)
 

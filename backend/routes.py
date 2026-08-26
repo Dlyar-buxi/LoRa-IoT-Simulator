@@ -154,10 +154,22 @@ def list_experiments():
 
 
 @router.get("/experiments/{exp_id}", response_model=ExperimentOut)
-def get_experiment(exp_id: int):
-    """单条实验详情：元信息 + 终态 JSON + 全量 events（供回放 / 对比）。"""
+def get_experiment(
+    exp_id: int,
+    events_limit: int = Query(
+        1000,
+        ge=-1,
+        description=(
+            "最多返回最近 N 条 events（按 seq 升序输出尾段；默认 1000 避免"
+            "大体量实验打爆响应）。显式传 -1 表示不设上限（大实验慎用）。"
+        ),
+    ),
+):
+    """单条实验详情：元信息 + 终态 JSON + events（默认最多最近 1000 条）。"""
     exp = recorder.get_experiment(exp_id)
     if exp is None:
         raise HTTPException(status_code=404, detail="experiment not found")
-    exp["events"] = recorder.get_experiment_events(exp_id)
+    # P1-7: 默认上限 1000。传 -1 走原生 None 语义（不限制）。
+    limit = None if events_limit == -1 else events_limit
+    exp["events"] = recorder.get_experiment_events(exp_id, limit=limit)
     return exp
