@@ -21,6 +21,7 @@ DEFAULT_SF = 7            # 默认 SF（近距离、高速）
 # ---------- 通信参数 ----------
 PACKET_INTERVAL = 300     # 发送周期（秒）= 5 分钟一次上报
 NOISE_FLOOR = -120.0      # 噪声底（dBm）
+ENVIRONMENT = "suburban"  # 默认传播环境 (urban|suburban|indoor|rural)
 COLLISION_SNR_THRESHOLD = 6.0   # 可成功解调所需最低 SNR（dB）
 
 # ---------- 重传 / 退避（Sprint 4.1） ----------
