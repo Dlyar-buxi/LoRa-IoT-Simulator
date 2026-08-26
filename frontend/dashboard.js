@@ -13,10 +13,15 @@ function gwColor(id) {
   return (idx >= 0 && idx < GW_PALETTE.length) ? GW_PALETTE[idx] : "#9ca3af";
 }
 
-const TICK_MS = 900;        // 自动运行步进间隔
+const TICK_MS = 900;        // 自动运行步进间隔（两次 tick 之间的「冷却时间」）
 const STEP_PER_TICK = 5;    // 每次推进的事件数
 
+// P1-8: autoTimer 现在是 setTimeout id；autoRunning 标志位驱动链式循环。
+// 目的：原 setInterval(tick, 900) 在服务器慢时会把 Promise 堆叠起来——
+// 新策略「上一轮 tick+refresh 全部结束后再等待 900ms 才开始下一轮」，
+// 绝不同时飞行两个 refresh() Promise.all。
 let autoTimer = null;
+let autoRunning = false;
 
 // ---------- WebSocket 实时通道（Sprint 5.1）----------
 // 初始：REST 首屏加载；运行：WebSocket 实时；异常：REST 轮询降级。
@@ -289,9 +294,9 @@ function applyConfig() {
     return;
   }
   // 停止自动运行，避免 Apply 后立即推进导致实验边界混乱（D3）
-  if (autoTimer) {
-    clearInterval(autoTimer);
-    autoTimer = null;
+  // 用 setAuto(false) 统一清理：既清 setTimeout 也重置 autoRunning 标志位
+  if (autoRunning || autoTimer != null) {
+    setAuto(false);
     const chk = $("chk-auto");
     if (chk) chk.checked = false;
   }
@@ -312,20 +317,40 @@ function bindConfigPanel() {
 }
 
 // ---------- 控制 ----------
+// 同步 tick：返回一个 Promise，便于链式 setAuto 知道本轮何时结束
 function tick() {
-  apiPost("/api/simulation/step?steps=" + STEP_PER_TICK)
+  return apiPost("/api/simulation/step?steps=" + STEP_PER_TICK)
     .then(refresh)
-    .catch(e => console.error("tick error:", e));
+    .catch(e => { console.error("tick error:", e); });
+}
+
+// P1-8: 链式 setTimeout，不堆叠请求。
+//   执行路径：tick() + refresh() 全部 await 完成 → 等待 TICK_MS → 下一轮
+//   如果用户中途 setAuto(false)：autoRunning=false，下一次循环入口直接返回
+async function autoTickLoop() {
+  if (!autoRunning) return;
+  try {
+    await tick();
+  } catch (_) { /* tick 内部已吞掉异常并打印 */ }
+  // tick 完全结束后再等 TICK_MS（而非 setInterval 的「每 900ms 不管你完没完」）
+  if (autoRunning) {
+    autoTimer = setTimeout(autoTickLoop, TICK_MS);
+  }
 }
 
 function setAuto(on) {
   if (on) {
-    if (autoTimer) return;
+    if (autoRunning) return;
+    autoRunning = true;
     apiPost("/api/simulation/start").catch(() => {});
-    autoTimer = setInterval(tick, TICK_MS);
-  } else if (autoTimer) {
-    clearInterval(autoTimer);
-    autoTimer = null;
+    // 第一次立刻触发（对应用户体感：勾选后马上开始跑）
+    autoTimer = setTimeout(autoTickLoop, 0);
+  } else {
+    autoRunning = false;
+    if (autoTimer != null) {
+      clearTimeout(autoTimer);
+      autoTimer = null;
+    }
   }
 }
 
