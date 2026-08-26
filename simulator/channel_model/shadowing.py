@@ -84,4 +84,6 @@ class ShadowingChannel(LogDistanceChannel):
             pdr=round(pdr, 4),
             packet_received=packet_received,
             propagation_delay=propagation_delay,
+            distance=context.distance,
+            path_loss=path_loss,
         )

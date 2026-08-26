@@ -33,6 +33,8 @@ def test_contract():
         "pdr",
         "packet_received",
         "propagation_delay",
+        "distance",
+        "path_loss",
     }
     # 扩展点正确, 且为 ChannelModel 子类
     assert isinstance(ch, ChannelModel)

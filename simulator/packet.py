@@ -44,6 +44,11 @@ class Packet:
     packet_received: bool | None = None
     propagation_delay: float | None = None
 
+    # full ChannelModel result handle (Sprint 6.4 — 完整输出引用, 自描述链路)
+    # 字符串注解避免与 channel_model.base 形成 import 耦合; 不进 to_dict 以免
+    # 序列化对象。旧消费者读 rssi/snr/success 兼容面, 不受影响。
+    channel_result: "ChannelResult" = None
+
     def to_dict(self):
         return {
             "node_id": self.node_id,

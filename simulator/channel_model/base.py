@@ -80,13 +80,26 @@ class TransmissionContext:
 
 @dataclass
 class ChannelResult:
-    """单次传输的输出契约。"""
+    """单次传输的输出契约。
+
+    字段稳定性 (Sprint 6.4 ChannelResult v1.1):
+    - 既有 5 字段为稳定契约, 模型 / 适配器 / 消费者均依赖;
+    - v1.1 新增 distance / path_loss (默认值 0.0): 使 Result 自描述一次链路
+      计算 (无需反查 TransmissionContext), 支撑 Monte Carlo 与链路预算模块化;
+    - 刻意不加入 success: success 是仿真高层 (packet collision) 结果, 由
+      simulation.py 计算, 不属于信道模型物理输出
+      (见 docs/design/channel-result-v1.md §3)。
+    """
 
     rssi: float                # dBm, 接收信号强度
     snr: float                 # dB, 信噪比
     pdr: float                 # 0..1, 包投递概率
     packet_received: bool      # 本次传输采样得到的布尔结果
     propagation_delay: float   # 秒, 单向路径时延
+
+    # --- v1.1 新增 (自描述链路, 默认 0.0 以兼容未显式赋值的构造) ---
+    distance: float = 0.0      # 米, 物理传播距离 (来自 TransmissionContext.distance)
+    path_loss: float = 0.0     # dB, 模型计算得到的路径损耗 PL(d)
 
 
 class ChannelModel(ABC):

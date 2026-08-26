@@ -62,6 +62,12 @@ class ChannelModelLinkAdapter:
         # 3. 评估
         result = self.model.evaluate(context)
 
+        # 3.1 保存完整 ChannelResult 句柄 (Sprint 6.4 生命周期增强)
+        #     下游既可继续读 packet.rssi / snr / success 兼容面, 也可经
+        #     packet.channel_result 访问自描述完整结果 (distance / path_loss 等),
+        #     无需回查 TransmissionContext。旧消费者零改动。
+        packet.channel_result = result
+
         # 4. 回填 packet (兼容既有字段语义 + 新增 ChannelResult 字段)
         packet.distance = round(distance, 2)
         packet.gateway_id = gateway.id

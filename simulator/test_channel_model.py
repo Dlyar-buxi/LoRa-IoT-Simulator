@@ -54,7 +54,7 @@ def test_channel_model_contract():
     ctx = _make_context(distance=300.0, sf=7, tx_power=14.0, environment="suburban")
     result = channel.evaluate(ctx)
 
-    # 返回类型与字段完备 (与 ChannelResult 契约一致)
+    # 返回类型与字段完备 (与 ChannelResult v1.1 契约一致)
     assert isinstance(result, ChannelResult)
     assert set(vars(result).keys()) == {
         "rssi",
@@ -62,6 +62,8 @@ def test_channel_model_contract():
         "pdr",
         "packet_received",
         "propagation_delay",
+        "distance",
+        "path_loss",
     }
 
     # 物理基本性质
