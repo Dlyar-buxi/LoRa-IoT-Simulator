@@ -94,29 +94,47 @@ class SimulationEngine:
         self._gw_map = {}          # gateway id -> Gateway（O(1) 查找）
         self._telemetry_sink = None  # 可选遥测出口（单 callable，默认 None）
         # P0-4: 生命周期钩子，替代外部 monkey-patch
-        self._reset_hooks = []     # list[callable() -> None]，_build 之后调用
-        self._configure_hooks = [] # list[callable() -> None]，_build 之后调用
+        #   pre_* : _build 之前执行（如 finalize 旧实验——需要读旧的 engine 状态）
+        #   post_*: _build 之后执行（如 begin 新实验 DB 上下文）
+        self._pre_reset_hooks = []
+        self._post_reset_hooks = []
+        self._pre_configure_hooks = []
+        self._post_configure_hooks = []
         # P0-1: 公共锁（RLock：允许 step 内被 sink 调用 get_* 时不自锁）
         self._lock = threading.RLock()
         self._build()
 
     # ---------- 生命周期钩子（P0-4：替代 monkey-patch）----------
 
-    def register_reset_hook(self, fn):
-        """注册 reset 完成后执行的回调 fn() -> None。
+    def register_pre_reset_hook(self, fn):
+        """注册「reset 真正执行 _build 之前」回调 fn() -> None。
 
-        典型用途：main.py 里把旧实验 finalize + 开新实验挂在这里，
-        从而避免对 self.reset 做 monkey-patch。
+        典型用途：main.py 里 finalize 旧实验（需要读旧 engine 状态）。
         """
         if not callable(fn):
             raise TypeError("reset hook must be callable")
-        self._reset_hooks.append(fn)
+        self._pre_reset_hooks.append(fn)
 
-    def register_configure_hook(self, fn):
-        """注册 configure 完成后执行的回调 fn() -> None。语义同 reset hook。"""
+    def register_reset_hook(self, fn):
+        """注册「reset 完成 (_build 之后)」回调 fn() -> None。
+
+        典型用途：main.py 里为新实验开 DB 上下文。
+        """
+        if not callable(fn):
+            raise TypeError("reset hook must be callable")
+        self._post_reset_hooks.append(fn)
+
+    def register_pre_configure_hook(self, fn):
+        """注册「configure 真正执行 _build 之前」回调 fn() -> None。语义同 pre_reset。"""
         if not callable(fn):
             raise TypeError("configure hook must be callable")
-        self._configure_hooks.append(fn)
+        self._pre_configure_hooks.append(fn)
+
+    def register_configure_hook(self, fn):
+        """注册「configure 完成 (_build 之后)」回调 fn() -> None。语义同 reset hook。"""
+        if not callable(fn):
+            raise TypeError("configure hook must be callable")
+        self._post_configure_hooks.append(fn)
 
     def _run_hooks(self, hooks):
         """执行一组钩子，任何异常内部吞掉（静默降级，不中断仿真）。"""
@@ -179,9 +197,12 @@ class SimulationEngine:
         - 仅更新显式传入的参数，其余沿用当前实例值。
         - 不创建第二个 engine；不影响已设置的 telemetry sink。
         - 每次重建都重新绑定 config.ADR_ENABLED（见 _build）。
-        - P0-4: build 完成后按注册顺序执行 configure_hooks。
+        - P0-4: _build 前执行 pre_configure_hooks（可 finalize 旧实验），
+          _build 后执行 post_configure_hooks（可开新实验 DB 上下文）。
         """
         with self._lock:
+            # P0-4 pre：旧 engine 状态（stats/nodes/gateways）仍可用，finalize 放这里
+            self._run_hooks(self._pre_configure_hooks)
             if node_count is not None:
                 self.node_count = node_count
             if area_size is not None:
@@ -195,7 +216,8 @@ class SimulationEngine:
             if adr_enabled is not None:
                 self.adr_enabled = adr_enabled
             self._build()
-            self._run_hooks(self._configure_hooks)
+            # P0-4 post：新实验拓扑已就绪，begin DB 上下文放这里
+            self._run_hooks(self._post_configure_hooks)
             return self.state
 
     # ---------- 生命周期（状态机）----------
@@ -224,11 +246,15 @@ class SimulationEngine:
     def reset(self):
         """用同一 seed 重建，回到 t=0 / received=0 / pending=200。
 
-        P0-4: build 完成后执行 reset_hooks（由 main.py 注入实验生命周期逻辑）。
+        P0-4: _build 前执行 pre_reset_hooks（可 finalize 旧实验），
+              _build 后执行 post_reset_hooks（可开新实验 DB 上下文）。
         """
         with self._lock:
+            # pre：旧 engine 状态仍可用（stats/nodes/gateways）
+            self._run_hooks(self._pre_reset_hooks)
             self._build()
-            self._run_hooks(self._reset_hooks)
+            # post：新实验已就绪
+            self._run_hooks(self._post_reset_hooks)
             return self.state
 
     def set_telemetry_sink(self, sink):

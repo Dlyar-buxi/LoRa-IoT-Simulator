@@ -42,37 +42,64 @@ FRONTEND_DIR = os.path.abspath(
 class WsManager:
     """维护 WS 客户端集合，并向其广播遥测文本。
 
-    仅一个 Python set + 捕获主事件循环；不引入 queue / thread 框架。
+    进程内单体：一个 asyncio.Lock 保护 _clients 读写 + 捕获主事件循环。
+
+    P0-5：为什么要加锁 —— 所有 async 方法（connect/disconnect/broadcast）
+    理论上都在同一个事件循环线程里跑，本来是串行的。但存在两个实际的
+    并发面：
+    1. `has_clients()` 被同步线程（sink）读，而 connect/disconnect 在 async
+       线程写，属于跨线程的 TOCTOU。
+    2. `broadcast_sync` 用 `run_coroutine_threadsafe` 把 broadcast 调度到
+       事件循环，多个同步线程并发 sink 时，broadcast 内部的 list(...)
+       迭代虽然不会 crash，但 has_clients 检查和实际 broadcast 之间
+       客户端集合可以被清空/新增，造成漏推或对已关闭 socket 发消息。
+
+    本实现用 `asyncio.Lock` 保护所有读写 `_clients` 的 async 入口；
+    `has_clients()` 做"非严格但无锁"的读取（因为只用来判断要不要调度，
+    错判只会导致多调度一次空 broadcast，不会出错）。
     """
 
     def __init__(self):
-        self._clients = set()
+        self._clients: set = set()
         self._loop = None
+        # P0-5: 单 asyncio.Lock（进程内事件循环单线程，足够）
+        self._lock = asyncio.Lock()
 
     def attach_loop(self, loop):
         self._loop = loop
 
-    def has_clients(self):
+    def has_clients(self) -> bool:
+        """非严格的快速检查（不拿锁）。仅用于「是否需要调度 broadcast」。"""
         return bool(self._clients)
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
-        self._clients.add(ws)
+        async with self._lock:
+            self._clients.add(ws)
 
-    def disconnect(self, ws: WebSocket):
-        self._clients.discard(ws)
+    async def disconnect(self, ws: WebSocket):
+        async with self._lock:
+            self._clients.discard(ws)
 
     async def broadcast(self, message: str):
-        for ws in list(self._clients):
-            try:
-                await ws.send_text(message)
-            except Exception:
+        # P0-5: 拿锁后 snapshot 客户端列表，再逐个发送。发送失败的在锁外
+        # 清理会有竞态，所以直接在锁内做 discard 即可。
+        async with self._lock:
+            targets = list(self._clients)
+            dead = []
+            for ws in targets:
+                try:
+                    await ws.send_text(message)
+                except Exception:
+                    dead.append(ws)
+            for ws in dead:
                 self._clients.discard(ws)
 
     def broadcast_sync(self, message: str):
         """从同步上下文（engine.step 内）桥接广播到事件循环。"""
         if not self._clients or self._loop is None or self._loop.is_closed():
             return
+        # broadcast 内部已带锁，这里无需再同步
         asyncio.run_coroutine_threadsafe(self.broadcast(message), self._loop)
 
 
@@ -123,21 +150,20 @@ def _begin_new_experiment():
     recorder.begin_experiment(_experiment_meta())
 
 
-# reset -> 关闭旧实验并开新实验（不覆盖旧实验）；engine.py 文件保持零修改
-_orig_reset = engine.reset
-def _reset():
-    _finalize_current_experiment()
-    _orig_reset()
-    _begin_new_experiment()
-engine.reset = _reset
-
-# configure -> 关闭旧实验并开新实验（不覆盖旧实验）；engine.py 文件保持零修改
-_orig_configure = engine.configure
-def _configure(*args, **kwargs):
-    _finalize_current_experiment()
-    _orig_configure(*args, **kwargs)
-    _begin_new_experiment()
-engine.configure = _configure
+# P0-4: 用 Engine 显式钩子替换 monkey-patch（语义完全对齐原代码）。
+# 原 monkey-patch 顺序：
+#   _finalize_current_experiment()  → 读 engine 旧状态 → 写 DB finalize
+#   _orig_reset / configure()       → 内部 _build → engine 变为新实验状态
+#   _begin_new_experiment()         → 读 engine 新参数 → 写 DB begin
+#
+# 用引擎钩子后，钩子是在 engine._lock 内部按顺序执行的，不会和 step 并发：
+#   pre_reset / pre_configure  → 仍持有旧 engine 状态 → finalize 旧实验
+#   (engine 内部 _build)       → 状态切到新实验
+#   post_reset / post_configure → 持有新 engine 状态 → begin 新实验
+engine.register_pre_reset_hook(_finalize_current_experiment)
+engine.register_reset_hook(_begin_new_experiment)
+engine.register_pre_configure_hook(_finalize_current_experiment)
+engine.register_configure_hook(_begin_new_experiment)
 
 
 # ---------- 生命周期：捕获主循环 + 懒连 MQTT ----------
@@ -176,9 +202,9 @@ async def ws_endpoint(websocket: WebSocket):
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        ws_manager.disconnect(websocket)
+        await ws_manager.disconnect(websocket)
     except Exception:
-        ws_manager.disconnect(websocket)
+        await ws_manager.disconnect(websocket)
 
 
 # 托管前端 Dashboard：根路径 / 直接返回 frontend/index.html（同源，免 CORS）
