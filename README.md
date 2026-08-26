@@ -414,7 +414,13 @@ LoRa-IoT-Simulator/
 ├── gateway/          # Frozen LoRa gateway / network layer
 ├── backend/          # FastAPI Adapter: engine, routes, mqtt_client, database, tests
 ├── frontend/         # Web dashboard (vanilla JS + SVG)
-├── docs/             # architecture.md, api.md
+├── docs/
+│   ├── benchmark/          # benchmark datasets and figures
+│   ├── releases/           # release notes (v1.1.0.md)
+│   ├── reproducibility.md  # reproduction guide
+│   ├── portfolio.md        # portfolio summary
+│   ├── architecture.md
+│   └── api.md
 ├── examples/         # curl scripts & MQTT subscriber guide
 ├── screenshots/      # demo captures
 ├── scripts/          # headless CLI: generate_experiment.py, export_report.py, run_demo.py
@@ -462,7 +468,8 @@ docker compose up --build      # full stack with one command
 | 5.5 | done | Dashboard Experiment Config Panel (frontend) |
 | 6.0 | done | Open-source release hardening (MIT, Docker, scripts, CI, docs) |
 | 6.1 | done | Benchmark Research Suite (scalability, ADR, distance) |
-| 6.2 | in progress | Research Release Polish (unified runner, README showcase, demo, v1.1.0) |
+| 6.2 | done | Demo pipeline, benchmark reproducibility, v1.1.0 release |
+| 6.3 | in progress | Portfolio refinement and interview preparation |
 
 ## Resume Highlights
 
@@ -473,5 +480,5 @@ docker compose up --build      # full stack with one command
 5. **Parameterized, reproducible experiments** via REST — no code changes to re-run a scenario.
 6. **Clean Adapter architecture** with a frozen simulation core (zero reverse dependency).
 7. **Resilient design** — every external sink degrades silently; no single point of failure.
-8. **Test discipline** — hermetic pytest, 12/12 regression, frozen-core diff always empty.
+8. **Test discipline** — hermetic pytest, 14/14 regression, frozen-core diff always empty.
 9. **Minimal runtime dependencies** — only `fastapi`, `uvicorn`, `paho-mqtt`.
